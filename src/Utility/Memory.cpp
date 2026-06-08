@@ -88,10 +88,17 @@ size_t forgetMMapAllocation(void *ptr) {
 }
 
 void *mmapNoReplace(uintptr_t address, size_t size) {
-  void *ptr =
-      mmap(reinterpret_cast<void *>(address), size, PROT_READ | PROT_WRITE,
-           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-  return ptr == MAP_FAILED ? nullptr : ptr;
+  void *requested = reinterpret_cast<void *>(address);
+  void *ptr = mmap(requested, size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+  if (ptr == MAP_FAILED) {
+    return nullptr;
+  }
+  if (ptr != requested) {
+    munmap(ptr, size);
+    return nullptr;
+  }
+  return ptr;
 }
 
 void *allocateAndroidStackAboveCurrentStack(size_t stackSize) {
@@ -190,6 +197,11 @@ bool allocateVirtualStack(GPRState *ctx, uint32_t stackSize, uint8_t **stack) {
   (*stack) = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
 #endif
   if (*stack == nullptr) {
+#if defined(QBDI_PLATFORM_ANDROID)
+    QBDI_WARN(
+        "Failed to allocate an Android virtual stack above the current "
+        "thread stack");
+#endif
     return false;
   }
 
