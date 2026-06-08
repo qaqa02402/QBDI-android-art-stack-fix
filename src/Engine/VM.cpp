@@ -495,8 +495,9 @@ bool VM::switchStackAndCallA(rword *retval, rword function, uint32_t argNum,
 
   QBDI_REQUIRE_ACTION(stackSize > 0x10000, return false);
 
-  uint8_t *fakestack = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
-  if (fakestack == nullptr) {
+  GPRState stackState = {};
+  uint8_t *fakestack = nullptr;
+  if (!allocateVirtualStack(&stackState, stackSize, &fakestack)) {
     return false;
   }
 
