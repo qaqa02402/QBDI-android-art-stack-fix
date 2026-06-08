@@ -16,7 +16,9 @@
  * limitations under the License.
  */
 #include <iterator>
+#include <algorithm>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <stdarg.h>
 #include <stdint.h>
@@ -24,6 +26,14 @@
 #include <string.h>
 #include <string>
 #include <vector>
+
+#if defined(__ANDROID__)
+#include <sys/mman.h>
+#include <unistd.h>
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+#endif
 
 #include "QBDI/Config.h"
 #include "QBDI/Memory.h"
@@ -33,6 +43,100 @@
 #include "Utility/LogSys.h"
 
 #define FRAME_LENGTH 16
+
+namespace {
+
+#if defined(QBDI_PLATFORM_ANDROID)
+
+struct MMapAllocation {
+  void *ptr;
+  size_t size;
+};
+
+std::mutex mmapAllocationsMutex;
+std::vector<MMapAllocation> mmapAllocations;
+
+uintptr_t alignUp(uintptr_t value, uintptr_t align) {
+  return (value + align - 1) & ~(align - 1);
+}
+
+size_t pageAlignedSize(size_t size) {
+  long pageSize = sysconf(_SC_PAGESIZE);
+  uintptr_t align = pageSize > 0 ? static_cast<uintptr_t>(pageSize) : 4096;
+  return static_cast<size_t>(alignUp(size, align));
+}
+
+uintptr_t currentStackAddress() {
+  return reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+}
+
+void rememberMMapAllocation(void *ptr, size_t size) {
+  std::lock_guard<std::mutex> lock(mmapAllocationsMutex);
+  mmapAllocations.push_back({ptr, size});
+}
+
+size_t forgetMMapAllocation(void *ptr) {
+  std::lock_guard<std::mutex> lock(mmapAllocationsMutex);
+  for (auto it = mmapAllocations.begin(); it != mmapAllocations.end(); ++it) {
+    if (it->ptr == ptr) {
+      size_t size = it->size;
+      mmapAllocations.erase(it);
+      return size;
+    }
+  }
+  return 0;
+}
+
+void *mmapNoReplace(uintptr_t address, size_t size) {
+  void *ptr = mmap(reinterpret_cast<void *>(address), size,
+                   PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+  return ptr == MAP_FAILED ? nullptr : ptr;
+}
+
+void *allocateAndroidStackAboveCurrentStack(size_t stackSize) {
+  const size_t allocationSize = pageAlignedSize(stackSize);
+  long pageSizeValue = sysconf(_SC_PAGESIZE);
+  const uintptr_t pageSize =
+      pageSizeValue > 0 ? static_cast<uintptr_t>(pageSizeValue) : 4096;
+  uintptr_t cursor = alignUp(currentStackAddress() + pageSize, pageSize);
+
+  std::vector<QBDI::MemoryMap> maps = QBDI::getCurrentProcessMaps(false);
+  std::sort(maps.begin(), maps.end(), [](const QBDI::MemoryMap &a,
+                                         const QBDI::MemoryMap &b) {
+    return a.range.start() < b.range.start();
+  });
+
+  for (const QBDI::MemoryMap &map : maps) {
+    if (map.range.end() <= cursor) {
+      continue;
+    }
+
+    uintptr_t candidate = alignUp(cursor, pageSize);
+    if (candidate < map.range.start() &&
+        candidate + allocationSize <= map.range.start()) {
+      if (void *ptr = mmapNoReplace(candidate, allocationSize)) {
+        rememberMMapAllocation(ptr, allocationSize);
+        return ptr;
+      }
+    }
+
+    if (cursor < map.range.end()) {
+      cursor = alignUp(map.range.end(), pageSize);
+    }
+  }
+
+  if (void *ptr = mmapNoReplace(alignUp(cursor, pageSize), allocationSize)) {
+    rememberMMapAllocation(ptr, allocationSize);
+    return ptr;
+  }
+
+  return nullptr;
+}
+
+#endif
+
+} // namespace
 
 namespace QBDI {
 
@@ -68,12 +172,26 @@ void alignedFree(void *ptr) {
 #if defined(QBDI_PLATFORM_WINDOWS)
   _aligned_free(ptr);
 #else
+#if defined(QBDI_PLATFORM_ANDROID)
+  if (size_t mmapSize = forgetMMapAllocation(ptr)) {
+    munmap(ptr, mmapSize);
+    return;
+  }
+#endif
   free(ptr);
 #endif
 }
 
 bool allocateVirtualStack(GPRState *ctx, uint32_t stackSize, uint8_t **stack) {
+#if defined(QBDI_PLATFORM_ANDROID)
+  (*stack) = static_cast<uint8_t *>(
+      allocateAndroidStackAboveCurrentStack(static_cast<size_t>(stackSize)));
+  if (*stack == nullptr) {
+    (*stack) = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
+  }
+#else
   (*stack) = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
+#endif
   if (*stack == nullptr) {
     return false;
   }
