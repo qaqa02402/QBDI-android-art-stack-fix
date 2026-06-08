@@ -15,8 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <iterator>
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -88,9 +88,9 @@ size_t forgetMMapAllocation(void *ptr) {
 }
 
 void *mmapNoReplace(uintptr_t address, size_t size) {
-  void *ptr = mmap(reinterpret_cast<void *>(address), size,
-                   PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+  void *ptr =
+      mmap(reinterpret_cast<void *>(address), size, PROT_READ | PROT_WRITE,
+           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
   return ptr == MAP_FAILED ? nullptr : ptr;
 }
 
@@ -102,10 +102,10 @@ void *allocateAndroidStackAboveCurrentStack(size_t stackSize) {
   uintptr_t cursor = alignUp(currentStackAddress() + pageSize, pageSize);
 
   std::vector<QBDI::MemoryMap> maps = QBDI::getCurrentProcessMaps(false);
-  std::sort(maps.begin(), maps.end(), [](const QBDI::MemoryMap &a,
-                                         const QBDI::MemoryMap &b) {
-    return a.range.start() < b.range.start();
-  });
+  std::sort(maps.begin(), maps.end(),
+            [](const QBDI::MemoryMap &a, const QBDI::MemoryMap &b) {
+              return a.range.start() < b.range.start();
+            });
 
   for (const QBDI::MemoryMap &map : maps) {
     if (map.range.end() <= cursor) {
