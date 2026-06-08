@@ -1,8 +1,8 @@
 #include <jni.h>
 
-#include <inttypes.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -44,8 +44,7 @@ __attribute__((noinline)) int targetGetMethodID(JNIEnv *env) {
     return -1;
   }
 
-  jmethodID mid =
-      env->GetStaticMethodID(cls, "main", "([Ljava/lang/String;)V");
+  jmethodID mid = env->GetStaticMethodID(cls, "main", "([Ljava/lang/String;)V");
   if (env->ExceptionCheck()) {
     env->ExceptionDescribe();
     env->ExceptionClear();
@@ -130,8 +129,8 @@ int runQBDICall(JNIEnv *env, const std::string &mode) {
 
   bool stackOk = false;
   if (lowStack) {
-    constexpr uintptr_t candidates[] = {
-        0x6000000000ULL, 0x5000000000ULL, 0x4000000000ULL, 0x3000000000ULL};
+    constexpr uintptr_t candidates[] = {0x6000000000ULL, 0x5000000000ULL,
+                                        0x4000000000ULL, 0x3000000000ULL};
     for (uintptr_t candidate : candidates) {
       void *mapped =
           mmap(reinterpret_cast<void *>(candidate), kVirtualStackSize,
@@ -139,8 +138,8 @@ int runQBDICall(JNIEnv *env, const std::string &mode) {
                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
       if (mapped != MAP_FAILED) {
         fakeStack = static_cast<uint8_t *>(mapped);
-        state->sp = reinterpret_cast<QBDI::rword>(fakeStack) +
-                    kVirtualStackSize - 16;
+        state->sp =
+            reinterpret_cast<QBDI::rword>(fakeStack) + kVirtualStackSize - 16;
         stackOk = true;
         break;
       }
@@ -148,13 +147,12 @@ int runQBDICall(JNIEnv *env, const std::string &mode) {
                   candidate, errno);
     }
   } else {
-    stackOk =
-        QBDI::allocateVirtualStack(state, kVirtualStackSize, &fakeStack);
+    stackOk = QBDI::allocateVirtualStack(state, kVirtualStackSize, &fakeStack);
   }
   std::printf("[native] QBDI call entry sp=0x%" PRIxPTR
               " fake stack=%p state_sp=0x%" PRIx64 " stackOk=%d lowStack=%d\n",
-              currentSp(), fakeStack, static_cast<uint64_t>(state->sp),
-              stackOk, lowStack);
+              currentSp(), fakeStack, static_cast<uint64_t>(state->sp), stackOk,
+              lowStack);
   if (!stackOk) {
     return -10;
   }
@@ -194,10 +192,9 @@ int runQBDISwitchStack(JNIEnv *env, const std::string &mode) {
   }
 
   QBDI::rword ret = 0;
-  bool callOk =
-      vm.switchStackAndCall(&ret, reinterpret_cast<QBDI::rword>(target),
-                            {reinterpret_cast<QBDI::rword>(env)},
-                            kEngineStackSize);
+  bool callOk = vm.switchStackAndCall(
+      &ret, reinterpret_cast<QBDI::rword>(target),
+      {reinterpret_cast<QBDI::rword>(env)}, kEngineStackSize);
   std::printf("[native] QBDI switchStackAndCall returned callOk=%d ret=%" PRIu64
               "\n",
               callOk, static_cast<uint64_t>(ret));
@@ -205,7 +202,8 @@ int runQBDISwitchStack(JNIEnv *env, const std::string &mode) {
 }
 
 __attribute__((noinline)) std::string targetStringReturn() {
-  return std::string("asdniwasdnklnweoinaszcnklwnoianaolsnclkwoanslclkwolalnksc");
+  return std::string(
+      "asdniwasdnklnweoinaszcnklwnoianaolsnclkwoanslclkwolalnksc");
 }
 
 int runStringReturn() {
@@ -216,7 +214,8 @@ int runStringReturn() {
   QBDI::VM vm;
   QBDI::GPRState *state = vm.getGPRState();
   uint8_t *fakeStack = nullptr;
-  bool stackOk = QBDI::allocateVirtualStack(state, kVirtualStackSize, &fakeStack);
+  bool stackOk =
+      QBDI::allocateVirtualStack(state, kVirtualStackSize, &fakeStack);
   std::printf("[native] stringret fake stack=%p state_sp=0x%" PRIx64
               " stackOk=%d\n",
               fakeStack, static_cast<uint64_t>(state->sp), stackOk);
@@ -281,8 +280,8 @@ JNIEnv *createJNIEnv(JavaVM **vmOut) {
     }
   }
 
-  void *art = dlopen("/apex/com.android.art/lib64/libart.so",
-                     RTLD_NOW | RTLD_GLOBAL);
+  void *art =
+      dlopen("/apex/com.android.art/lib64/libart.so", RTLD_NOW | RTLD_GLOBAL);
   if (art == nullptr) {
     std::fprintf(stderr, "[native] dlopen libart failed: %s\n", dlerror());
     return nullptr;
