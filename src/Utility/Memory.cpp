@@ -186,9 +186,6 @@ bool allocateVirtualStack(GPRState *ctx, uint32_t stackSize, uint8_t **stack) {
 #if defined(QBDI_PLATFORM_ANDROID)
   (*stack) = static_cast<uint8_t *>(
       allocateAndroidStackAboveCurrentStack(static_cast<size_t>(stackSize)));
-  if (*stack == nullptr) {
-    (*stack) = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
-  }
 #else
   (*stack) = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
 #endif
