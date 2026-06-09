@@ -15,7 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-.text
+.section qbdi_execbroker_host, "ax", @progbits
 
 .hidden __qbdi_runCodeBlock
 .globl  __qbdi_runCodeBlock

@@ -17,22 +17,19 @@
  */
 #include "QBDI/PtrAuth.h"
 
-#include <dlfcn.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <cstring>
 #include <mutex>
-#include <string>
 #include <vector>
 
 #include "QBDI/Memory.hpp"
-#include "Engine/Engine.h"
 #include "Engine/LLVMCPU.h"
 #include "ExecBlock/ExecBlock.h"
 #include "ExecBroker/ExecBroker.h"
+#include "ExecBroker/AARCH64/AndroidSignalHost.h"
 #include "Patch/AARCH64/Layer2_AARCH64.h"
 #include "Patch/AARCH64/PatchGenerator_AARCH64.h"
 #include "Patch/AARCH64/RelocatableInst_AARCH64.h"
@@ -82,34 +79,6 @@ struct sigaction previousSigsegv = {};
 struct sigaction previousSigbus = {};
 thread_local TransferSignalState *activeTransferSignalState = nullptr;
 
-template <typename MemberFunction>
-uintptr_t getMemberFunctionAddress(MemberFunction memberFunction) {
-  // Android AArch64 uses the Itanium C++ ABI. For a non-virtual member
-  // function, the member-function pointer stores the target code address
-  // directly in its first word.
-  struct ItaniumMemberFunctionPointer {
-    uintptr_t function;
-    intptr_t adjustment;
-  };
-
-  ItaniumMemberFunctionPointer addr = {};
-  static_assert(sizeof(memberFunction) == sizeof(addr));
-  std::memcpy(&addr, &memberFunction, sizeof(addr));
-  return addr.function;
-}
-
-uintptr_t getExecBlockRunAddress() {
-  return getMemberFunctionAddress(&ExecBlock::run);
-}
-
-uintptr_t getEngineRunAddress() {
-  return getMemberFunctionAddress(&Engine::run);
-}
-
-uintptr_t getHostCodeStartAddress() {
-  return std::min(getEngineRunAddress(), getExecBlockRunAddress());
-}
-
 uintptr_t alignDown(uintptr_t value, uintptr_t align) {
   return value & ~(align - 1);
 }
@@ -132,7 +101,8 @@ int toMProtect(Permission permission) {
   return prot;
 }
 
-void threadCtxToGPRState(const ucontext_t *uap, GPRState *gprState) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void
+threadCtxToGPRState(const ucontext_t *uap, GPRState *gprState) {
   gprState->x0 = uap->uc_mcontext.regs[0];
   gprState->x1 = uap->uc_mcontext.regs[1];
   gprState->x2 = uap->uc_mcontext.regs[2];
@@ -169,7 +139,8 @@ void threadCtxToGPRState(const ucontext_t *uap, GPRState *gprState) {
   gprState->nzcv = uap->uc_mcontext.pstate & 0xf0000000;
 }
 
-void floatCtxToFPRState(const ucontext_t *uap, FPRState *fprState) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void
+floatCtxToFPRState(const ucontext_t *uap, FPRState *fprState) {
   const fpsimd_context *fuap =
       reinterpret_cast<const fpsimd_context *>(&(uap->uc_mcontext.__reserved));
 
@@ -209,8 +180,9 @@ void floatCtxToFPRState(const ucontext_t *uap, FPRState *fprState) {
   fprState->fpsr = fuap->fpsr;
 }
 
-void dispatchPreviousSignal(const struct sigaction &previous, int signo,
-                            siginfo_t *info, void *ucontext) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void
+dispatchPreviousSignal(const struct sigaction &previous, int signo,
+                       siginfo_t *info, void *ucontext) {
   if ((previous.sa_flags & SA_SIGINFO) != 0 && previous.sa_sigaction != nullptr) {
     previous.sa_sigaction(signo, info, ucontext);
     return;
@@ -228,7 +200,8 @@ void dispatchPreviousSignal(const struct sigaction &previous, int signo,
   _exit(128 + signo);
 }
 
-void brokerExecSignalHandler(int signo, siginfo_t *info, void *ucontext) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void
+brokerExecSignalHandler(int signo, siginfo_t *info, void *ucontext) {
   TransferSignalState *state = activeTransferSignalState;
   if (state == nullptr) {
     dispatchPreviousSignal(signo == SIGSEGV ? previousSigsegv : previousSigbus,
@@ -250,7 +223,7 @@ void brokerExecSignalHandler(int signo, siginfo_t *info, void *ucontext) {
   siglongjmp(state->jumpBuffer, 1);
 }
 
-bool installExecSignalHandlers() {
+QBDI_ANDROID_SIGNAL_BROKER_HOST bool installExecSignalHandlers() {
   std::lock_guard<std::mutex> lock(signalHandlerMutex);
   if (signalHandlerUsers != 0) {
     signalHandlerUsers++;
@@ -274,7 +247,7 @@ bool installExecSignalHandlers() {
   return true;
 }
 
-void uninstallExecSignalHandlers() {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void uninstallExecSignalHandlers() {
   std::lock_guard<std::mutex> lock(signalHandlerMutex);
   if (signalHandlerUsers == 0) {
     return;
@@ -287,40 +260,16 @@ void uninstallExecSignalHandlers() {
   sigaction(SIGBUS, &previousSigbus, nullptr);
 }
 
-bool shouldExcludeProtectedPage(uintptr_t pageStart, rword pageSize) {
-  const uintptr_t engineRunPage =
-      alignDown(getEngineRunAddress(), pageSize);
-  const uintptr_t handlerPage =
-      alignDown(reinterpret_cast<uintptr_t>(&brokerExecSignalHandler), pageSize);
-  const uintptr_t execBlockRunPage =
-      alignDown(getExecBlockRunAddress(), pageSize);
-  const uintptr_t installPage =
-      alignDown(reinterpret_cast<uintptr_t>(&installExecSignalHandlers), pageSize);
-  const uintptr_t uninstallPage = alignDown(
-      reinterpret_cast<uintptr_t>(&uninstallExecSignalHandlers), pageSize);
-  const uintptr_t transferPage = alignDown(
-      reinterpret_cast<uintptr_t>(&transferExecutionWithSignals), pageSize);
-  return pageStart == engineRunPage || pageStart == handlerPage ||
-         pageStart == execBlockRunPage ||
-         pageStart == installPage || pageStart == uninstallPage ||
-         pageStart == transferPage;
-}
-
-std::string getHostModuleName() {
-  Dl_info info;
-  if (dladdr(reinterpret_cast<void *>(getExecBlockRunAddress()), &info) == 0 ||
-      info.dli_fname == nullptr) {
-    return {};
-  }
-  return info.dli_fname;
+bool isSignalBrokerHostPage(uintptr_t pageStart, rword pageSize) {
+  const uintptr_t hostSectionStart =
+      alignDown(getAndroidSignalBrokerHostStart(), pageSize);
+  const uintptr_t hostSectionEnd =
+      alignUp(getAndroidSignalBrokerHostEnd(), pageSize);
+  return pageStart >= hostSectionStart && pageStart < hostSectionEnd;
 }
 
 bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
                            std::vector<ProtectedPage> &pages) {
-  const uintptr_t hostCodeStartPage =
-      alignDown(getHostCodeStartAddress(), pageSize);
-  const std::string hostModuleName = getHostModuleName();
-
   for (const MemoryMap &map : getCurrentProcessMaps(true)) {
     if ((map.permission & PF_EXEC) == 0) {
       continue;
@@ -337,11 +286,7 @@ bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
       int prot = toMProtect(map.permission);
 
       for (uintptr_t page = start; page < end; page += pageSize) {
-        if (!hostModuleName.empty() && map.name == hostModuleName &&
-            page >= hostCodeStartPage) {
-          continue;
-        }
-        if (shouldExcludeProtectedPage(page, pageSize)) {
+        if (isSignalBrokerHostPage(page, pageSize)) {
           continue;
         }
         if (!pages.empty() &&
@@ -359,7 +304,8 @@ bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
   return !pages.empty();
 }
 
-bool setPagesExecutable(const std::vector<ProtectedPage> &pages, bool executable) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST bool
+setPagesExecutable(const std::vector<ProtectedPage> &pages, bool executable) {
   for (const ProtectedPage &page : pages) {
     int prot = executable ? page.prot : (page.prot & ~PROT_EXEC);
     if (mprotect(page.addr, page.size, prot) != 0) {
@@ -369,10 +315,11 @@ bool setPagesExecutable(const std::vector<ProtectedPage> &pages, bool executable
   return true;
 }
 
-bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
-                                  const ExecBrokerArchData &archData,
-                                  rword pageSize, rword addr, GPRState *gprState,
-                                  FPRState *fprState) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST bool
+transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
+                             const ExecBrokerArchData &archData,
+                             rword pageSize, rword addr, GPRState *gprState,
+                             FPRState *fprState) {
   std::vector<ProtectedPage> pages;
   if (!collectProtectedPages(broker, pageSize, pages)) {
     return false;

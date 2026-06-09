@@ -26,6 +26,7 @@
 #include "QBDI/State.h"
 #include "QBDI/VM.h"
 #include "Engine/LLVMCPU.h"
+#include "ExecBroker/AARCH64/AndroidSignalHost.h"
 #include "ExecBlock/AARCH64/Context_AARCH64.h"
 #include "ExecBlock/ExecBlock.h"
 #include "Patch/AARCH64/ExecBlockPatch_AARCH64.h"
@@ -58,7 +59,7 @@ void ExecBlock::selectSeq(uint16_t seqID) {
   context->hostState.executeFlags = seqRegistry[currentSeq].executeFlags;
 }
 
-void ExecBlock::run() {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void ExecBlock::run() {
   if constexpr (is_ios) {
     if (isRWRXSupported()) {
       if (not isRX()) {
