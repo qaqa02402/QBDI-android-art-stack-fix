@@ -19,6 +19,7 @@
 
 #include <setjmp.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -320,15 +321,27 @@ bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
                                   FPRState *fprState) {
   std::vector<ProtectedPage> pages;
   if (!collectProtectedPages(broker, pageSize, pages)) {
+    fprintf(stderr,
+            "[QBDI broker] signal path unavailable addr=0x%" PRIx64 "\n",
+            static_cast<uint64_t>(addr));
     return false;
   }
   if (!installExecSignalHandlers()) {
+    fprintf(stderr,
+            "[QBDI broker] install handlers failed addr=0x%" PRIx64 "\n",
+            static_cast<uint64_t>(addr));
     return false;
   }
   if (!setPagesExecutable(pages, false)) {
+    fprintf(stderr, "[QBDI broker] mprotect disable exec failed pages=%zu\n",
+            pages.size());
     uninstallExecSignalHandlers();
     return false;
   }
+
+  fprintf(stderr, "[QBDI broker] signal path active addr=0x%" PRIx64
+                  " pages=%zu\n",
+          static_cast<uint64_t>(addr), pages.size());
 
   TransferSignalState state = {&broker, gprState, fprState, {}, false};
   activeTransferSignalState = &state;
@@ -340,12 +353,18 @@ bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
     transferBlock.getContext()->hostState.brokerAddr = addr;
     transferBlock.run();
 
+    fprintf(stderr,
+            "[QBDI broker] signal path returned without trap addr=0x%" PRIx64
+            "\n",
+            static_cast<uint64_t>(addr));
     activeTransferSignalState = nullptr;
     setPagesExecutable(pages, true);
     uninstallExecSignalHandlers();
     return false;
   }
 
+  fprintf(stderr, "[QBDI broker] signal path trapped addr=0x%" PRIx64 "\n",
+          static_cast<uint64_t>(addr));
   activeTransferSignalState = nullptr;
   setPagesExecutable(pages, true);
   uninstallExecSignalHandlers();
