@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "QBDI/Memory.hpp"
+#include "Engine/Engine.h"
 #include "Engine/LLVMCPU.h"
 #include "ExecBlock/ExecBlock.h"
 #include "ExecBroker/ExecBroker.h"
@@ -81,7 +82,8 @@ struct sigaction previousSigsegv = {};
 struct sigaction previousSigbus = {};
 thread_local TransferSignalState *activeTransferSignalState = nullptr;
 
-uintptr_t getExecBlockRunAddress() {
+template <typename MemberFunction>
+uintptr_t getMemberFunctionAddress(MemberFunction memberFunction) {
   // Android AArch64 uses the Itanium C++ ABI. For a non-virtual member
   // function, the member-function pointer stores the target code address
   // directly in its first word.
@@ -90,11 +92,22 @@ uintptr_t getExecBlockRunAddress() {
     intptr_t adjustment;
   };
 
-  auto run = &ExecBlock::run;
   ItaniumMemberFunctionPointer addr = {};
-  static_assert(sizeof(run) == sizeof(addr));
-  std::memcpy(&addr, &run, sizeof(addr));
+  static_assert(sizeof(memberFunction) == sizeof(addr));
+  std::memcpy(&addr, &memberFunction, sizeof(addr));
   return addr.function;
+}
+
+uintptr_t getExecBlockRunAddress() {
+  return getMemberFunctionAddress(&ExecBlock::run);
+}
+
+uintptr_t getEngineRunAddress() {
+  return getMemberFunctionAddress(&Engine::run);
+}
+
+uintptr_t getHostCodeStartAddress() {
+  return std::min(getEngineRunAddress(), getExecBlockRunAddress());
 }
 
 uintptr_t alignDown(uintptr_t value, uintptr_t align) {
@@ -275,6 +288,8 @@ void uninstallExecSignalHandlers() {
 }
 
 bool shouldExcludeProtectedPage(uintptr_t pageStart, rword pageSize) {
+  const uintptr_t engineRunPage =
+      alignDown(getEngineRunAddress(), pageSize);
   const uintptr_t handlerPage =
       alignDown(reinterpret_cast<uintptr_t>(&brokerExecSignalHandler), pageSize);
   const uintptr_t execBlockRunPage =
@@ -285,7 +300,8 @@ bool shouldExcludeProtectedPage(uintptr_t pageStart, rword pageSize) {
       reinterpret_cast<uintptr_t>(&uninstallExecSignalHandlers), pageSize);
   const uintptr_t transferPage = alignDown(
       reinterpret_cast<uintptr_t>(&transferExecutionWithSignals), pageSize);
-  return pageStart == handlerPage || pageStart == execBlockRunPage ||
+  return pageStart == engineRunPage || pageStart == handlerPage ||
+         pageStart == execBlockRunPage ||
          pageStart == installPage || pageStart == uninstallPage ||
          pageStart == transferPage;
 }
@@ -302,7 +318,7 @@ std::string getHostModuleName() {
 bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
                            std::vector<ProtectedPage> &pages) {
   const uintptr_t hostCodeStartPage =
-      alignDown(getExecBlockRunAddress(), pageSize);
+      alignDown(getHostCodeStartAddress(), pageSize);
   const std::string hostModuleName = getHostModuleName();
 
   for (const MemoryMap &map : getCurrentProcessMaps(true)) {
