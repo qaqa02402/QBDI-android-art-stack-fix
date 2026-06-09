@@ -27,6 +27,12 @@ java --module jdk.compiler/com.sun.tools.javac.Main \
 (cd repro/android-art-stack/out/dex && zip -q -r ../repro.jar classes.dex)
 
 /home/kali/Android/Sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++ \
+  -shared -fPIC -std=c++17 -O0 -g -static-libstdc++ \
+  repro/android-art-stack/qbdi_art_stack_helper.cpp \
+  -llog -ldl -lz -lm \
+  -o repro/android-art-stack/out/lib/libqbdihelper.so
+
+/home/kali/Android/Sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++ \
   -shared -fPIC -std=c++17 -O0 -g -fvisibility=hidden -static-libstdc++ \
   -Iusr/local/include \
   repro/android-art-stack/qbdi_art_stack_repro.cpp \
@@ -36,8 +42,9 @@ java --module jdk.compiler/com.sun.tools.javac.Main \
 
 adb shell 'rm -rf /data/local/tmp/qbdi-art-stack && mkdir -p /data/local/tmp/qbdi-art-stack'
 adb push repro/android-art-stack/out/repro.jar /data/local/tmp/qbdi-art-stack/repro.jar
+adb push repro/android-art-stack/out/lib/libqbdihelper.so /data/local/tmp/qbdi-art-stack/libqbdihelper.so
 adb push repro/android-art-stack/out/lib/libqbdirepro.so /data/local/tmp/qbdi-art-stack/libqbdirepro.so
-adb shell 'chmod 644 /data/local/tmp/qbdi-art-stack/repro.jar /data/local/tmp/qbdi-art-stack/libqbdirepro.so'
+adb shell 'chmod 644 /data/local/tmp/qbdi-art-stack/repro.jar /data/local/tmp/qbdi-art-stack/libqbdihelper.so /data/local/tmp/qbdi-art-stack/libqbdirepro.so'
 ```
 
 Useful commands:
@@ -46,6 +53,9 @@ Useful commands:
 adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro switch-callstatic'
 adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro lowcall-pending'
 adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro stringret'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro call-cpp-exception'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro call-setjmp'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro allmaps-call-cpp-exception'
 ```
 
 Observed results on Pixel 6 / Android 14:

@@ -1,5 +1,7 @@
 #include <jni.h>
 
+#include <setjmp.h>
+
 #include <dlfcn.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -17,11 +19,59 @@ namespace {
 
 constexpr uint32_t kVirtualStackSize = 0x100000;
 constexpr uint32_t kEngineStackSize = 0x20000;
+constexpr const char *kLibDir = "/data/local/tmp/qbdi-art-stack";
+
+using HelperCppThrow = int (*)();
+using HelperLongjmp = void (*)(void *, int);
+
+struct HelperExports {
+  void *handle = nullptr;
+  HelperCppThrow cppThrow = nullptr;
+  HelperLongjmp doLongjmp = nullptr;
+};
 
 uintptr_t currentSp() {
   uintptr_t sp = 0;
   asm volatile("mov %0, sp" : "=r"(sp));
   return sp;
+}
+
+bool isNativeMode(const std::string &mode) {
+  return mode.find("native") == 0;
+}
+
+bool isSwitchMode(const std::string &mode) {
+  return mode.find("switch") == 0 || mode.find("allmaps-switch") == 0;
+}
+
+bool useLowStack(const std::string &mode) {
+  return mode.find("low") != std::string::npos;
+}
+
+bool useAllMaps(const std::string &mode) {
+  return mode.find("allmaps") != std::string::npos;
+}
+
+const HelperExports &getHelperExports() {
+  static const HelperExports exports = []() {
+    HelperExports helper;
+    std::string path = std::string(kLibDir) + "/libqbdihelper.so";
+    helper.handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (helper.handle == nullptr) {
+      std::fprintf(stderr, "[native] dlopen %s failed: %s\n", path.c_str(),
+                   dlerror());
+      return helper;
+    }
+    helper.cppThrow = reinterpret_cast<HelperCppThrow>(
+        dlsym(helper.handle, "helper_cpp_throw"));
+    helper.doLongjmp = reinterpret_cast<HelperLongjmp>(
+        dlsym(helper.handle, "helper_longjmp"));
+    std::printf("[native] helper handle=%p cppThrow=%p doLongjmp=%p\n",
+                helper.handle, reinterpret_cast<void *>(helper.cppThrow),
+                reinterpret_cast<void *>(helper.doLongjmp));
+    return helper;
+  }();
+  return exports;
 }
 
 __attribute__((noinline)) int targetFindClass(JNIEnv *env) {
@@ -98,9 +148,52 @@ __attribute__((noinline)) int targetPendingFindClass(JNIEnv *env) {
   return env->ExceptionCheck() ? -3 : 1;
 }
 
+__attribute__((noinline)) int targetCppException(JNIEnv *) {
+  std::printf("[target] targetCppException sp=0x%" PRIxPTR "\n", currentSp());
+  const HelperExports &helper = getHelperExports();
+  if (helper.cppThrow == nullptr) {
+    return -10;
+  }
+
+  try {
+    int ret = helper.cppThrow();
+    std::printf("[target] helper_cpp_throw returned %d\n", ret);
+    return -11;
+  } catch (int value) {
+    std::printf("[target] caught int exception: %d\n", value);
+    return 42;
+  } catch (...) {
+    std::printf("[target] caught unknown exception\n");
+    return 43;
+  }
+}
+
+__attribute__((noinline)) int targetSetjmpLongjmp(JNIEnv *) {
+  std::printf("[target] targetSetjmpLongjmp sp=0x%" PRIxPTR "\n", currentSp());
+  const HelperExports &helper = getHelperExports();
+  if (helper.doLongjmp == nullptr) {
+    return -10;
+  }
+
+  jmp_buf env;
+  int ret = setjmp(env);
+  std::printf("[target] setjmp returned %d\n", ret);
+  if (ret == 0) {
+    helper.doLongjmp(&env, 42);
+    return -11;
+  }
+  return ret;
+}
+
 using Target = int (*)(JNIEnv *);
 
 Target selectTarget(const std::string &mode) {
+  if (mode.find("cpp-exception") != std::string::npos) {
+    return targetCppException;
+  }
+  if (mode.find("setjmp") != std::string::npos) {
+    return targetSetjmpLongjmp;
+  }
   if (mode.find("pending") != std::string::npos) {
     return targetPendingFindClass;
   }
@@ -125,7 +218,13 @@ int runQBDICall(JNIEnv *env, const std::string &mode) {
   QBDI::VM vm;
   QBDI::GPRState *state = vm.getGPRState();
   uint8_t *fakeStack = nullptr;
-  bool lowStack = mode.find("low") != std::string::npos;
+  bool lowStack = useLowStack(mode);
+  bool allMaps = useAllMaps(mode);
+
+  if (mode.find("cpp-exception") != std::string::npos ||
+      mode.find("setjmp") != std::string::npos) {
+    getHelperExports();
+  }
 
   bool stackOk = false;
   if (lowStack) {
@@ -157,10 +256,14 @@ int runQBDICall(JNIEnv *env, const std::string &mode) {
     return -10;
   }
 
-  bool rangeOk =
-      vm.addInstrumentedModuleFromAddr(reinterpret_cast<QBDI::rword>(target));
-  std::printf("[native] addInstrumentedModuleFromAddr=%d target=%p\n", rangeOk,
-              reinterpret_cast<void *>(target));
+  bool rangeOk = allMaps
+                     ? vm.instrumentAllExecutableMaps()
+                     : vm.addInstrumentedModuleFromAddr(
+                           reinterpret_cast<QBDI::rword>(target));
+  std::printf("[native] %s=%d target=%p\n",
+              allMaps ? "instrumentAllExecutableMaps"
+                      : "addInstrumentedModuleFromAddr",
+              rangeOk, reinterpret_cast<void *>(target));
   if (!rangeOk) {
     QBDI::alignedFree(fakeStack);
     return -11;
@@ -182,11 +285,21 @@ int runQBDICall(JNIEnv *env, const std::string &mode) {
 int runQBDISwitchStack(JNIEnv *env, const std::string &mode) {
   Target target = selectTarget(mode);
   QBDI::VM vm;
+  bool allMaps = useAllMaps(mode);
 
-  bool rangeOk =
-      vm.addInstrumentedModuleFromAddr(reinterpret_cast<QBDI::rword>(target));
-  std::printf("[native] addInstrumentedModuleFromAddr=%d target=%p\n", rangeOk,
-              reinterpret_cast<void *>(target));
+  if (mode.find("cpp-exception") != std::string::npos ||
+      mode.find("setjmp") != std::string::npos) {
+    getHelperExports();
+  }
+
+  bool rangeOk = allMaps
+                     ? vm.instrumentAllExecutableMaps()
+                     : vm.addInstrumentedModuleFromAddr(
+                           reinterpret_cast<QBDI::rword>(target));
+  std::printf("[native] %s=%d target=%p\n",
+              allMaps ? "instrumentAllExecutableMaps"
+                      : "addInstrumentedModuleFromAddr",
+              rangeOk, reinterpret_cast<void *>(target));
   if (!rangeOk) {
     return -20;
   }
@@ -328,10 +441,10 @@ extern "C" JNIEXPORT jint JNICALL Java_Repro_run(JNIEnv *env, jclass,
   if (mode == "stringret") {
     return runStringReturn();
   }
-  if (mode.find("native") == 0) {
+  if (isNativeMode(mode)) {
     return runNative(env, mode);
   }
-  if (mode.find("switch") == 0) {
+  if (isSwitchMode(mode)) {
     return runQBDISwitchStack(env, mode);
   }
   return runQBDICall(env, mode);
@@ -346,9 +459,9 @@ int main(int argc, char **argv) {
   }
 
   int ret = 0;
-  if (mode.find("native") == 0) {
+  if (isNativeMode(mode)) {
     ret = runNative(env, mode);
-  } else if (mode.find("switch") == 0) {
+  } else if (isSwitchMode(mode)) {
     ret = runQBDISwitchStack(env, mode);
   } else {
     ret = runQBDICall(env, mode);

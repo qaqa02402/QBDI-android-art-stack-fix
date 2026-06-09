@@ -17,6 +17,15 @@
  */
 #include "QBDI/PtrAuth.h"
 
+#include <setjmp.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <mutex>
+#include <vector>
+
+#include "QBDI/Memory.hpp"
 #include "Engine/LLVMCPU.h"
 #include "ExecBlock/ExecBlock.h"
 #include "ExecBroker/ExecBroker.h"
@@ -30,6 +39,321 @@
 
 namespace QBDI {
 static const size_t SCAN_DISTANCE = 2;
+
+#if defined(QBDI_PLATFORM_ANDROID)
+namespace {
+
+struct fpsimd_context {
+  struct {
+    uint32_t magic;
+    uint32_t size;
+  } head;
+  uint32_t fpsr;
+  uint32_t fpcr;
+  __uint128_t vregs[32];
+};
+
+struct ProtectedPage {
+  void *addr;
+  size_t size;
+  int prot;
+};
+
+struct TransferSignalState {
+  ExecBroker *broker;
+  GPRState *gprState;
+  FPRState *fprState;
+  sigjmp_buf jumpBuffer;
+  bool trapped;
+};
+
+bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
+                                  const ExecBrokerArchData &archData,
+                                  rword pageSize, rword addr, GPRState *gprState,
+                                  FPRState *fprState);
+
+std::mutex signalHandlerMutex;
+size_t signalHandlerUsers = 0;
+struct sigaction previousSigsegv = {};
+struct sigaction previousSigbus = {};
+thread_local TransferSignalState *activeTransferSignalState = nullptr;
+
+uintptr_t alignDown(uintptr_t value, uintptr_t align) {
+  return value & ~(align - 1);
+}
+
+uintptr_t alignUp(uintptr_t value, uintptr_t align) {
+  return (value + align - 1) & ~(align - 1);
+}
+
+int toMProtect(qbdi_Permission permission) {
+  int prot = 0;
+  if ((permission & QBDI_PF_READ) != 0) {
+    prot |= PROT_READ;
+  }
+  if ((permission & QBDI_PF_WRITE) != 0) {
+    prot |= PROT_WRITE;
+  }
+  if ((permission & QBDI_PF_EXEC) != 0) {
+    prot |= PROT_EXEC;
+  }
+  return prot;
+}
+
+void threadCtxToGPRState(const ucontext_t *uap, GPRState *gprState) {
+  gprState->x0 = uap->uc_mcontext.regs[0];
+  gprState->x1 = uap->uc_mcontext.regs[1];
+  gprState->x2 = uap->uc_mcontext.regs[2];
+  gprState->x3 = uap->uc_mcontext.regs[3];
+  gprState->x4 = uap->uc_mcontext.regs[4];
+  gprState->x5 = uap->uc_mcontext.regs[5];
+  gprState->x6 = uap->uc_mcontext.regs[6];
+  gprState->x7 = uap->uc_mcontext.regs[7];
+  gprState->x8 = uap->uc_mcontext.regs[8];
+  gprState->x9 = uap->uc_mcontext.regs[9];
+  gprState->x10 = uap->uc_mcontext.regs[10];
+  gprState->x11 = uap->uc_mcontext.regs[11];
+  gprState->x12 = uap->uc_mcontext.regs[12];
+  gprState->x13 = uap->uc_mcontext.regs[13];
+  gprState->x14 = uap->uc_mcontext.regs[14];
+  gprState->x15 = uap->uc_mcontext.regs[15];
+  gprState->x16 = uap->uc_mcontext.regs[16];
+  gprState->x17 = uap->uc_mcontext.regs[17];
+  gprState->x18 = uap->uc_mcontext.regs[18];
+  gprState->x19 = uap->uc_mcontext.regs[19];
+  gprState->x20 = uap->uc_mcontext.regs[20];
+  gprState->x21 = uap->uc_mcontext.regs[21];
+  gprState->x22 = uap->uc_mcontext.regs[22];
+  gprState->x23 = uap->uc_mcontext.regs[23];
+  gprState->x24 = uap->uc_mcontext.regs[24];
+  gprState->x25 = uap->uc_mcontext.regs[25];
+  gprState->x26 = uap->uc_mcontext.regs[26];
+  gprState->x27 = uap->uc_mcontext.regs[27];
+  gprState->x28 = uap->uc_mcontext.regs[28];
+  gprState->x29 = uap->uc_mcontext.regs[29];
+  gprState->lr = uap->uc_mcontext.regs[30];
+  gprState->sp = uap->uc_mcontext.sp;
+  gprState->pc = uap->uc_mcontext.pc;
+  gprState->nzcv = uap->uc_mcontext.pstate & 0xf0000000;
+}
+
+void floatCtxToFPRState(const ucontext_t *uap, FPRState *fprState) {
+  const fpsimd_context *fuap =
+      reinterpret_cast<const fpsimd_context *>(&(uap->uc_mcontext.__reserved));
+
+  fprState->v0 = fuap->vregs[0];
+  fprState->v1 = fuap->vregs[1];
+  fprState->v2 = fuap->vregs[2];
+  fprState->v3 = fuap->vregs[3];
+  fprState->v4 = fuap->vregs[4];
+  fprState->v5 = fuap->vregs[5];
+  fprState->v6 = fuap->vregs[6];
+  fprState->v7 = fuap->vregs[7];
+  fprState->v8 = fuap->vregs[8];
+  fprState->v9 = fuap->vregs[9];
+  fprState->v10 = fuap->vregs[10];
+  fprState->v11 = fuap->vregs[11];
+  fprState->v12 = fuap->vregs[12];
+  fprState->v13 = fuap->vregs[13];
+  fprState->v14 = fuap->vregs[14];
+  fprState->v15 = fuap->vregs[15];
+  fprState->v16 = fuap->vregs[16];
+  fprState->v17 = fuap->vregs[17];
+  fprState->v18 = fuap->vregs[18];
+  fprState->v19 = fuap->vregs[19];
+  fprState->v20 = fuap->vregs[20];
+  fprState->v21 = fuap->vregs[21];
+  fprState->v22 = fuap->vregs[22];
+  fprState->v23 = fuap->vregs[23];
+  fprState->v24 = fuap->vregs[24];
+  fprState->v25 = fuap->vregs[25];
+  fprState->v26 = fuap->vregs[26];
+  fprState->v27 = fuap->vregs[27];
+  fprState->v28 = fuap->vregs[28];
+  fprState->v29 = fuap->vregs[29];
+  fprState->v30 = fuap->vregs[30];
+  fprState->v31 = fuap->vregs[31];
+  fprState->fpcr = fuap->fpcr;
+  fprState->fpsr = fuap->fpsr;
+}
+
+void dispatchPreviousSignal(const struct sigaction &previous, int signo,
+                            siginfo_t *info, void *ucontext) {
+  if ((previous.sa_flags & SA_SIGINFO) != 0 && previous.sa_sigaction != nullptr) {
+    previous.sa_sigaction(signo, info, ucontext);
+    return;
+  }
+  if (previous.sa_handler == SIG_IGN) {
+    return;
+  }
+  if (previous.sa_handler != nullptr && previous.sa_handler != SIG_DFL) {
+    previous.sa_handler(signo);
+    return;
+  }
+
+  signal(signo, SIG_DFL);
+  raise(signo);
+  _exit(128 + signo);
+}
+
+void brokerExecSignalHandler(int signo, siginfo_t *info, void *ucontext) {
+  TransferSignalState *state = activeTransferSignalState;
+  if (state == nullptr) {
+    dispatchPreviousSignal(signo == SIGSEGV ? previousSigsegv : previousSigbus,
+                           signo, info, ucontext);
+    return;
+  }
+
+  auto *uap = static_cast<ucontext_t *>(ucontext);
+  rword pc = strip_ptrauth(uap->uc_mcontext.pc);
+  if (!state->broker->isInstrumented(pc)) {
+    dispatchPreviousSignal(signo == SIGSEGV ? previousSigsegv : previousSigbus,
+                           signo, info, ucontext);
+    return;
+  }
+
+  threadCtxToGPRState(uap, state->gprState);
+  floatCtxToFPRState(uap, state->fprState);
+  state->trapped = true;
+  siglongjmp(state->jumpBuffer, 1);
+}
+
+bool installExecSignalHandlers() {
+  std::lock_guard<std::mutex> lock(signalHandlerMutex);
+  if (signalHandlerUsers != 0) {
+    signalHandlerUsers++;
+    return true;
+  }
+
+  struct sigaction action = {};
+  action.sa_sigaction = brokerExecSignalHandler;
+  action.sa_flags = SA_SIGINFO | SA_NODEFER;
+  sigemptyset(&action.sa_mask);
+
+  if (sigaction(SIGSEGV, &action, &previousSigsegv) != 0) {
+    return false;
+  }
+  if (sigaction(SIGBUS, &action, &previousSigbus) != 0) {
+    sigaction(SIGSEGV, &previousSigsegv, nullptr);
+    return false;
+  }
+
+  signalHandlerUsers = 1;
+  return true;
+}
+
+void uninstallExecSignalHandlers() {
+  std::lock_guard<std::mutex> lock(signalHandlerMutex);
+  if (signalHandlerUsers == 0) {
+    return;
+  }
+  signalHandlerUsers--;
+  if (signalHandlerUsers != 0) {
+    return;
+  }
+  sigaction(SIGSEGV, &previousSigsegv, nullptr);
+  sigaction(SIGBUS, &previousSigbus, nullptr);
+}
+
+bool shouldExcludeProtectedPage(uintptr_t pageStart, rword pageSize) {
+  const uintptr_t handlerPage =
+      alignDown(reinterpret_cast<uintptr_t>(&brokerExecSignalHandler), pageSize);
+  const uintptr_t installPage =
+      alignDown(reinterpret_cast<uintptr_t>(&installExecSignalHandlers), pageSize);
+  const uintptr_t uninstallPage = alignDown(
+      reinterpret_cast<uintptr_t>(&uninstallExecSignalHandlers), pageSize);
+  const uintptr_t transferPage = alignDown(
+      reinterpret_cast<uintptr_t>(&transferExecutionWithSignals), pageSize);
+  return pageStart == handlerPage || pageStart == installPage ||
+         pageStart == uninstallPage || pageStart == transferPage;
+}
+
+bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
+                           std::vector<ProtectedPage> &pages) {
+  for (const MemoryMap &map : getCurrentProcessMaps(false)) {
+    if ((map.permission & QBDI_PF_EXEC) == 0) {
+      continue;
+    }
+
+    for (const Range<rword> &range : broker.getInstrumentedRange().getRanges()) {
+      if (!range.overlaps(map.range)) {
+        continue;
+      }
+
+      Range<rword> overlap = range.intersect(map.range);
+      uintptr_t start = alignDown(overlap.start(), pageSize);
+      uintptr_t end = alignUp(overlap.end(), pageSize);
+      int prot = toMProtect(map.permission);
+
+      for (uintptr_t page = start; page < end; page += pageSize) {
+        if (shouldExcludeProtectedPage(page, pageSize)) {
+          continue;
+        }
+        if (!pages.empty() &&
+            reinterpret_cast<uintptr_t>(pages.back().addr) + pages.back().size ==
+                page &&
+            pages.back().prot == prot) {
+          pages.back().size += pageSize;
+          continue;
+        }
+        pages.push_back(
+            {reinterpret_cast<void *>(page), static_cast<size_t>(pageSize), prot});
+      }
+    }
+  }
+  return !pages.empty();
+}
+
+bool setPagesExecutable(const std::vector<ProtectedPage> &pages, bool executable) {
+  for (const ProtectedPage &page : pages) {
+    int prot = executable ? page.prot : (page.prot & ~PROT_EXEC);
+    if (mprotect(page.addr, page.size, prot) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
+                                  const ExecBrokerArchData &archData,
+                                  rword pageSize, rword addr, GPRState *gprState,
+                                  FPRState *fprState) {
+  std::vector<ProtectedPage> pages;
+  if (!collectProtectedPages(broker, pageSize, pages)) {
+    return false;
+  }
+  if (!installExecSignalHandlers()) {
+    return false;
+  }
+  if (!setPagesExecutable(pages, false)) {
+    uninstallExecSignalHandlers();
+    return false;
+  }
+
+  TransferSignalState state = {&broker, gprState, fprState, {}, false};
+  activeTransferSignalState = &state;
+
+  if (sigsetjmp(state.jumpBuffer, 1) == 0) {
+    transferBlock.selectSeq(archData.transfertX28.seqID);
+    transferBlock.getContext()->gprState = *gprState;
+    transferBlock.getContext()->fprState = *fprState;
+    transferBlock.getContext()->hostState.brokerAddr = addr;
+    transferBlock.run();
+
+    activeTransferSignalState = nullptr;
+    setPagesExecutable(pages, true);
+    uninstallExecSignalHandlers();
+    return false;
+  }
+
+  activeTransferSignalState = nullptr;
+  setPagesExecutable(pages, true);
+  uninstallExecSignalHandlers();
+  return state.trapped;
+}
+
+} // namespace
+#endif
 
 void ExecBroker::initExecBrokerSequences(const LLVMCPUs &llvmCPUs) {
   llvm::MCInst nopInst = nop();
@@ -164,6 +488,13 @@ rword *ExecBroker::getReturnPoint(GPRState *gprState) const {
 
 bool ExecBroker::transferExecution(rword addr, GPRState *gprState,
                                    FPRState *fprState) {
+
+#if defined(QBDI_PLATFORM_ANDROID)
+  if (transferExecutionWithSignals(*this, *transferBlock, archData, pageSize,
+                                   addr, gprState, fprState)) {
+    return true;
+  }
+#endif
 
   // Search all return address
   rword *ptr = getReturnPoint(gprState);
