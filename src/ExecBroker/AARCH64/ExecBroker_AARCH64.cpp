@@ -17,13 +17,15 @@
  */
 #include "QBDI/PtrAuth.h"
 
+#include <dlfcn.h>
 #include <setjmp.h>
 #include <signal.h>
-#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cstring>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "QBDI/Memory.hpp"
@@ -78,6 +80,22 @@ size_t signalHandlerUsers = 0;
 struct sigaction previousSigsegv = {};
 struct sigaction previousSigbus = {};
 thread_local TransferSignalState *activeTransferSignalState = nullptr;
+
+uintptr_t getExecBlockRunAddress() {
+  // Android AArch64 uses the Itanium C++ ABI. For a non-virtual member
+  // function, the member-function pointer stores the target code address
+  // directly in its first word.
+  struct ItaniumMemberFunctionPointer {
+    uintptr_t function;
+    intptr_t adjustment;
+  };
+
+  auto run = &ExecBlock::run;
+  ItaniumMemberFunctionPointer addr = {};
+  static_assert(sizeof(run) == sizeof(addr));
+  std::memcpy(&addr, &run, sizeof(addr));
+  return addr.function;
+}
 
 uintptr_t alignDown(uintptr_t value, uintptr_t align) {
   return value & ~(align - 1);
@@ -259,19 +277,35 @@ void uninstallExecSignalHandlers() {
 bool shouldExcludeProtectedPage(uintptr_t pageStart, rword pageSize) {
   const uintptr_t handlerPage =
       alignDown(reinterpret_cast<uintptr_t>(&brokerExecSignalHandler), pageSize);
+  const uintptr_t execBlockRunPage =
+      alignDown(getExecBlockRunAddress(), pageSize);
   const uintptr_t installPage =
       alignDown(reinterpret_cast<uintptr_t>(&installExecSignalHandlers), pageSize);
   const uintptr_t uninstallPage = alignDown(
       reinterpret_cast<uintptr_t>(&uninstallExecSignalHandlers), pageSize);
   const uintptr_t transferPage = alignDown(
       reinterpret_cast<uintptr_t>(&transferExecutionWithSignals), pageSize);
-  return pageStart == handlerPage || pageStart == installPage ||
-         pageStart == uninstallPage || pageStart == transferPage;
+  return pageStart == handlerPage || pageStart == execBlockRunPage ||
+         pageStart == installPage || pageStart == uninstallPage ||
+         pageStart == transferPage;
+}
+
+std::string getHostModuleName() {
+  Dl_info info;
+  if (dladdr(reinterpret_cast<void *>(getExecBlockRunAddress()), &info) == 0 ||
+      info.dli_fname == nullptr) {
+    return {};
+  }
+  return info.dli_fname;
 }
 
 bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
                            std::vector<ProtectedPage> &pages) {
-  for (const MemoryMap &map : getCurrentProcessMaps(false)) {
+  const uintptr_t hostCodeStartPage =
+      alignDown(getExecBlockRunAddress(), pageSize);
+  const std::string hostModuleName = getHostModuleName();
+
+  for (const MemoryMap &map : getCurrentProcessMaps(true)) {
     if ((map.permission & PF_EXEC) == 0) {
       continue;
     }
@@ -287,6 +321,10 @@ bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
       int prot = toMProtect(map.permission);
 
       for (uintptr_t page = start; page < end; page += pageSize) {
+        if (!hostModuleName.empty() && map.name == hostModuleName &&
+            page >= hostCodeStartPage) {
+          continue;
+        }
         if (shouldExcludeProtectedPage(page, pageSize)) {
           continue;
         }
@@ -321,27 +359,15 @@ bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
                                   FPRState *fprState) {
   std::vector<ProtectedPage> pages;
   if (!collectProtectedPages(broker, pageSize, pages)) {
-    fprintf(stderr,
-            "[QBDI broker] signal path unavailable addr=0x%" PRIx64 "\n",
-            static_cast<uint64_t>(addr));
     return false;
   }
   if (!installExecSignalHandlers()) {
-    fprintf(stderr,
-            "[QBDI broker] install handlers failed addr=0x%" PRIx64 "\n",
-            static_cast<uint64_t>(addr));
     return false;
   }
   if (!setPagesExecutable(pages, false)) {
-    fprintf(stderr, "[QBDI broker] mprotect disable exec failed pages=%zu\n",
-            pages.size());
     uninstallExecSignalHandlers();
     return false;
   }
-
-  fprintf(stderr, "[QBDI broker] signal path active addr=0x%" PRIx64
-                  " pages=%zu\n",
-          static_cast<uint64_t>(addr), pages.size());
 
   TransferSignalState state = {&broker, gprState, fprState, {}, false};
   activeTransferSignalState = &state;
@@ -353,18 +379,12 @@ bool transferExecutionWithSignals(ExecBroker &broker, ExecBlock &transferBlock,
     transferBlock.getContext()->hostState.brokerAddr = addr;
     transferBlock.run();
 
-    fprintf(stderr,
-            "[QBDI broker] signal path returned without trap addr=0x%" PRIx64
-            "\n",
-            static_cast<uint64_t>(addr));
     activeTransferSignalState = nullptr;
     setPagesExecutable(pages, true);
     uninstallExecSignalHandlers();
     return false;
   }
 
-  fprintf(stderr, "[QBDI broker] signal path trapped addr=0x%" PRIx64 "\n",
-          static_cast<uint64_t>(addr));
   activeTransferSignalState = nullptr;
   setPagesExecutable(pages, true);
   uninstallExecSignalHandlers();
