@@ -86,15 +86,15 @@ uintptr_t alignUp(uintptr_t value, uintptr_t align) {
   return (value + align - 1) & ~(align - 1);
 }
 
-int toMProtect(qbdi_Permission permission) {
+int toMProtect(Permission permission) {
   int prot = 0;
-  if ((permission & QBDI_PF_READ) != 0) {
+  if ((permission & PF_READ) != 0) {
     prot |= PROT_READ;
   }
-  if ((permission & QBDI_PF_WRITE) != 0) {
+  if ((permission & PF_WRITE) != 0) {
     prot |= PROT_WRITE;
   }
-  if ((permission & QBDI_PF_EXEC) != 0) {
+  if ((permission & PF_EXEC) != 0) {
     prot |= PROT_EXEC;
   }
   return prot;
@@ -271,7 +271,7 @@ bool shouldExcludeProtectedPage(uintptr_t pageStart, rword pageSize) {
 bool collectProtectedPages(const ExecBroker &broker, rword pageSize,
                            std::vector<ProtectedPage> &pages) {
   for (const MemoryMap &map : getCurrentProcessMaps(false)) {
-    if ((map.permission & QBDI_PF_EXEC) == 0) {
+    if ((map.permission & PF_EXEC) == 0) {
       continue;
     }
 
