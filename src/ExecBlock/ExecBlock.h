@@ -39,6 +39,7 @@
 #include "ExecBlock/ARM/ScratchRegisterInfo_ARM.h"
 #elif defined(QBDI_ARCH_AARCH64)
 #include "ExecBlock/AARCH64/ScratchRegisterInfo_AARCH64.h"
+#include "ExecBroker/AARCH64/AndroidSignalHost.h"
 #else
 #error "No ScratchRegisterInfo for this architecture"
 #endif
@@ -194,7 +195,7 @@ public:
 
   /* Low level run function. Does not take care of the callbacks.
    */
-  void run();
+  QBDI_ANDROID_SIGNAL_BROKER_HOST void run();
 
   static uint64_t getPageSize();
 
@@ -405,7 +406,7 @@ public:
    *
    *  @param seqID [in] Basic block ID within the exec block.
    */
-  void selectSeq(uint16_t seqID);
+  QBDI_ANDROID_SIGNAL_BROKER_HOST void selectSeq(uint16_t seqID);
 
   /*! Get a pointer to the context structure stored in the data block.
    *
