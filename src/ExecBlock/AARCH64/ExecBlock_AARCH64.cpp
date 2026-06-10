@@ -46,7 +46,7 @@ namespace QBDI {
 
 static const uint32_t MINIMAL_BLOCK_SIZE = 0xc;
 
-void ExecBlock::selectSeq(uint16_t seqID) {
+QBDI_ANDROID_SIGNAL_BROKER_HOST void ExecBlock::selectSeq(uint16_t seqID) {
   QBDI_REQUIRE(seqID < seqRegistry.size());
   currentSeq = seqID;
   currentInst = seqRegistry[currentSeq].startInstID;
