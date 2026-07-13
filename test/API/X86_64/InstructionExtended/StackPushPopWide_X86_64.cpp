@@ -31,14 +31,11 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-PUSH2") {
       "xchg %rsp, %rdx\n"
       "push2 %rax, %rbx\n"
       "xchg %rsp, %rdx\n";
-  QBDI::rword tmpStack[10] = {0};
-  QBDI::rword stackAddr = (QBDI::rword)&tmpStack[9] - 16;
+  alignas(16) QBDI::rword tmpStack[10] = {0};
+  QBDI::rword stackAddr = (QBDI::rword)&tmpStack[8] - 16;
   ExpectedMemoryAccesses expectedPre = {{}};
   ExpectedMemoryAccesses expectedPost = {{
-      {stackAddr + 8, 0x1111111111111111ULL, 8, QBDI::MEMORY_WRITE,
-       QBDI::MEMORY_NO_FLAGS},
-      {stackAddr, 0x2222222222222222ULL, 8, QBDI::MEMORY_WRITE,
-       QBDI::MEMORY_NO_FLAGS},
+      {stackAddr, 0, 16, QBDI::MEMORY_WRITE, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
   vm.addMnemonicCB("PUSH2", QBDI::PREINST, checkAccess, &expectedPre);
@@ -46,11 +43,13 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-PUSH2") {
   QBDI::GPRState *state = vm.getGPRState();
   state->rax = 0x1111111111111111ULL;
   state->rbx = 0x2222222222222222ULL;
-  state->rdx = (QBDI::rword)&tmpStack[9];
+  state->rdx = (QBDI::rword)&tmpStack[8];
   vm.setGPRState(state);
   QBDI::rword retval;
   bool ran = runOnASM(&retval, source);
   CHECK(ran);
+  CHECK(*reinterpret_cast<uint64_t *>(stackAddr) == 0x1111111111111111ULL);
+  CHECK(*reinterpret_cast<uint64_t *>(stackAddr + 8) == 0x2222222222222222ULL);
   for (auto &e : expectedPost.accesses)
     CHECK(e.see);
 }
@@ -63,14 +62,11 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-PUSH2P") {
       "xchg %rsp, %rdx\n"
       "push2p %rax, %rbx\n"
       "xchg %rsp, %rdx\n";
-  QBDI::rword tmpStack[10] = {0};
-  QBDI::rword stackAddr = (QBDI::rword)&tmpStack[9] - 16;
+  alignas(16) QBDI::rword tmpStack[10] = {0};
+  QBDI::rword stackAddr = (QBDI::rword)&tmpStack[8] - 16;
   ExpectedMemoryAccesses expectedPre = {{}};
   ExpectedMemoryAccesses expectedPost = {{
-      {stackAddr + 8, 0x1111111111111111ULL, 8, QBDI::MEMORY_WRITE,
-       QBDI::MEMORY_NO_FLAGS},
-      {stackAddr, 0x2222222222222222ULL, 8, QBDI::MEMORY_WRITE,
-       QBDI::MEMORY_NO_FLAGS},
+      {stackAddr, 0, 16, QBDI::MEMORY_WRITE, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
   vm.addMnemonicCB("PUSH2P", QBDI::PREINST, checkAccess, &expectedPre);
@@ -78,11 +74,13 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-PUSH2P") {
   QBDI::GPRState *state = vm.getGPRState();
   state->rax = 0x1111111111111111ULL;
   state->rbx = 0x2222222222222222ULL;
-  state->rdx = (QBDI::rword)&tmpStack[9];
+  state->rdx = (QBDI::rword)&tmpStack[8];
   vm.setGPRState(state);
   QBDI::rword retval;
   bool ran = runOnASM(&retval, source);
   CHECK(ran);
+  CHECK(*reinterpret_cast<uint64_t *>(stackAddr) == 0x1111111111111111ULL);
+  CHECK(*reinterpret_cast<uint64_t *>(stackAddr + 8) == 0x2222222222222222ULL);
   for (auto &e : expectedPost.accesses)
     CHECK(e.see);
 }
@@ -95,16 +93,13 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-POP2") {
       "xchg %rsp, %rdx\n"
       "pop2 %rax, %rbx\n"
       "xchg %rsp, %rdx\n";
-  QBDI::rword tmpStack[10] = {0};
+  alignas(16) QBDI::rword tmpStack[10] = {0};
   uint64_t *stackTop = reinterpret_cast<uint64_t *>(&tmpStack[6]);
   stackTop[1] = 0x3333333333333333ULL;
   stackTop[0] = 0x4444444444444444ULL;
   QBDI::rword stackAddr = (QBDI::rword)stackTop;
   ExpectedMemoryAccesses expectedPre = {{
-      {stackAddr + 8, 0x3333333333333333ULL, 8, QBDI::MEMORY_READ,
-       QBDI::MEMORY_NO_FLAGS},
-      {stackAddr, 0x4444444444444444ULL, 8, QBDI::MEMORY_READ,
-       QBDI::MEMORY_NO_FLAGS},
+      {stackAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
   ExpectedMemoryAccesses expectedPost = expectedPre;
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
@@ -116,6 +111,8 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-POP2") {
   QBDI::rword retval;
   bool ran = runOnASM(&retval, source);
   CHECK(ran);
+  CHECK(vm.getGPRState()->rax == 0x3333333333333333ULL);
+  CHECK(vm.getGPRState()->rbx == 0x4444444444444444ULL);
   for (auto &e : expectedPre.accesses)
     CHECK(e.see);
   for (auto &e : expectedPost.accesses)
@@ -130,16 +127,13 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-POP2P") {
       "xchg %rsp, %rdx\n"
       "pop2p %rax, %rbx\n"
       "xchg %rsp, %rdx\n";
-  QBDI::rword tmpStack[10] = {0};
+  alignas(16) QBDI::rword tmpStack[10] = {0};
   uint64_t *stackTop = reinterpret_cast<uint64_t *>(&tmpStack[6]);
   stackTop[1] = 0x3333333333333333ULL;
   stackTop[0] = 0x4444444444444444ULL;
   QBDI::rword stackAddr = (QBDI::rword)stackTop;
   ExpectedMemoryAccesses expectedPre = {{
-      {stackAddr + 8, 0x3333333333333333ULL, 8, QBDI::MEMORY_READ,
-       QBDI::MEMORY_NO_FLAGS},
-      {stackAddr, 0x4444444444444444ULL, 8, QBDI::MEMORY_READ,
-       QBDI::MEMORY_NO_FLAGS},
+      {stackAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
   ExpectedMemoryAccesses expectedPost = expectedPre;
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
@@ -151,6 +145,8 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-POP2P") {
   QBDI::rword retval;
   bool ran = runOnASM(&retval, source);
   CHECK(ran);
+  CHECK(vm.getGPRState()->rax == 0x3333333333333333ULL);
+  CHECK(vm.getGPRState()->rbx == 0x4444444444444444ULL);
   for (auto &e : expectedPre.accesses)
     CHECK(e.see);
   for (auto &e : expectedPost.accesses)
@@ -165,7 +161,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-PUSHP64r") {
       "xchg %rsp, %rdx\n"
       "pushp %rax\n"
       "xchg %rsp, %rdx\n";
-  QBDI::rword tmpStack[10] = {0};
+  alignas(16) QBDI::rword tmpStack[10] = {0};
   QBDI::rword stackAddr = (QBDI::rword)&tmpStack[9] - 8;
   ExpectedMemoryAccesses expectedPre = {{}};
   ExpectedMemoryAccesses expectedPost = {{
@@ -194,7 +190,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-POPP64r") {
       "xchg %rsp, %rdx\n"
       "popp %rax\n"
       "xchg %rsp, %rdx\n";
-  QBDI::rword tmpStack[10] = {0};
+  alignas(16) QBDI::rword tmpStack[10] = {0};
   uint64_t *stackTop = reinterpret_cast<uint64_t *>(&tmpStack[8]);
   *stackTop = 0x99aabbccddeeff11ULL;
   QBDI::rword stackAddr = (QBDI::rword)stackTop;

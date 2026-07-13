@@ -821,9 +821,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA1MSG1rm") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha1msg1 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha1msg1 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
@@ -850,9 +850,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA1MSG2rm") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha1msg2 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha1msg2 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
@@ -879,9 +879,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA1NEXTErm") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha1nexte 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha1nexte 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
@@ -908,9 +908,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA1RNDS4rmi") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha1rnds4 $0x1, 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha1rnds4 $0x1, 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
@@ -937,9 +937,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA256MSG1rm") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha256msg1 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha256msg1 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
@@ -966,9 +966,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA256MSG2rm") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha256msg2 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha256msg2 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};
@@ -995,9 +995,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-SHA256RNDS2rm") {
   if (!checkFeature("sha")) {
     return;
   }
-  const char source[] = "sha256rnds2 %xmm0, 0x11(%rbx,%rsi,4), %xmm0\n";
+  const char source[] = "sha256rnds2 %xmm0, 0xc(%rbx,%rsi,4), %xmm0\n";
   alignas(16) uint8_t buffer[48] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[21];
+  QBDI::rword targetAddr = (QBDI::rword)&buffer[16];
   ExpectedMemoryAccesses expectedPre = {{
       {targetAddr, 0, 16, QBDI::MEMORY_READ, QBDI::MEMORY_UNKNOWN_VALUE},
   }};

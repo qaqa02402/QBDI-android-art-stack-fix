@@ -18,8 +18,8 @@
 
 #include "MemAccessTestUtils_X86_64.h"
 
+using QBDITestBatch2::avx512OpmaskSaveRestoreUnsupported;
 using QBDITestBatch2::checkAccess;
-using QBDITestBatch2::checkEmptyAccess;
 using QBDITestBatch2::checkFeature;
 using QBDITestBatch2::ExpectedMemoryAccess;
 using QBDITestBatch2::ExpectedMemoryAccesses;
@@ -395,6 +395,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-KMOVDmk") {
   if (!checkFeature("avx512f")) {
     return;
   }
+  if (avx512OpmaskSaveRestoreUnsupported()) {
+    return;
+  }
   const char source[] = "kmovd %k0, 0x11(%rbx,%rsi,4)\n";
   uint8_t buffer[40] = {0};
   uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
@@ -423,6 +426,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-KMOVDmk_EVEX") {
     return;
   }
   if (!checkFeature("egpr")) {
+    return;
+  }
+  if (avx512OpmaskSaveRestoreUnsupported()) {
     return;
   }
   const char source[] = "{evex} kmovd %k0, 0x11(%rbx,%rsi,4)\n";
@@ -455,13 +461,13 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-LDMXCSR") {
   const char source[] = "ldmxcsr 0x11(%rbx,%rsi,4)\n";
   uint8_t buffer[40] = {0};
   uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
-  *target = 0x00001f80;
+  *target = 0x00001fa0;
   QBDI::rword targetAddr = (QBDI::rword)target;
   ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0x00001f80, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
+      {targetAddr, 0x00001fa0, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
   }};
   ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0x00001f80, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
+      {targetAddr, 0x00001fa0, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
   }};
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
   vm.addMnemonicCB("LDMXCSR", QBDI::PREINST, checkAccess, &expectedPre);
@@ -473,6 +479,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-LDMXCSR") {
   QBDI::rword retval;
   bool ran = runOnASM(&retval, source);
   CHECK(ran);
+  CHECK(vm.getFPRState()->mxcsr == 0x00001fa0);
   for (auto &e : expectedPre.accesses)
     CHECK(e.see);
   for (auto &e : expectedPost.accesses)
@@ -516,13 +523,13 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-VLDMXCSR") {
   const char source[] = "vldmxcsr 0x11(%rbx,%rsi,4)\n";
   uint8_t buffer[40] = {0};
   uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
-  *target = 0x00001f80;
+  *target = 0x00001fa0;
   QBDI::rword targetAddr = (QBDI::rword)target;
   ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0x00001f80, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
+      {targetAddr, 0x00001fa0, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
   }};
   ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0x00001f80, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
+      {targetAddr, 0x00001fa0, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
   }};
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
   vm.addMnemonicCB("VLDMXCSR", QBDI::PREINST, checkAccess, &expectedPre);
@@ -534,6 +541,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-VLDMXCSR") {
   QBDI::rword retval;
   bool ran = runOnASM(&retval, source);
   CHECK(ran);
+  CHECK(vm.getFPRState()->mxcsr == 0x00001fa0);
   for (auto &e : expectedPre.accesses)
     CHECK(e.see);
   for (auto &e : expectedPost.accesses)

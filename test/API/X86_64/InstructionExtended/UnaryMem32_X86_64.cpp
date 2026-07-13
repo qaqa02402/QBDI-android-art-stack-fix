@@ -19,7 +19,6 @@
 #include "MemAccessTestUtils_X86_64.h"
 
 using QBDITestBatch2::checkAccess;
-using QBDITestBatch2::checkEmptyAccess;
 using QBDITestBatch2::checkFeature;
 using QBDITestBatch2::ExpectedMemoryAccess;
 using QBDITestBatch2::ExpectedMemoryAccesses;
@@ -1211,7 +1210,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-IMUL32rmi_EVEX") {
   if (!checkFeature("egpr")) {
     return;
   }
-  const char source[] = "{evex} imull $0x5, 0x11(%rbx,%rsi,4), %eax\n";
+  const char source[] = "{evex} imull $0x1000, 0x11(%rbx,%rsi,4), %eax\n";
   uint8_t buffer[40] = {0};
   uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
   *target = 0x00000003;
@@ -1244,7 +1243,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-IMUL32rmi_NF") {
   if (!checkFeature("nf")) {
     return;
   }
-  const char source[] = "{nf} imull $0x5, 0x11(%rbx,%rsi,4), %eax\n";
+  const char source[] = "{nf} imull $0x1000, 0x11(%rbx,%rsi,4), %eax\n";
   uint8_t buffer[40] = {0};
   uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
   *target = 0x00000003;

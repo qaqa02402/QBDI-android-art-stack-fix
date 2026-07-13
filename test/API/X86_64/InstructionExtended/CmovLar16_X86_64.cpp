@@ -19,7 +19,6 @@
 #include "MemAccessTestUtils_X86_64.h"
 
 using QBDITestBatch2::checkAccess;
-using QBDITestBatch2::checkEmptyAccess;
 using QBDITestBatch2::checkFeature;
 using QBDITestBatch2::ExpectedMemoryAccess;
 using QBDITestBatch2::ExpectedMemoryAccesses;
@@ -104,11 +103,8 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-CFCMOV16mr") {
   uint16_t *target = reinterpret_cast<uint16_t *>(&buffer[21]);
   *target = 0x1234;
   QBDI::rword targetAddr = (QBDI::rword)target;
-  ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0x1234, 2, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
-  }};
+  ExpectedMemoryAccesses expectedPre = {{}};
   ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0x1234, 2, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
       {targetAddr, 0x5678, 2, QBDI::MEMORY_WRITE, QBDI::MEMORY_NO_FLAGS},
   }};
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);

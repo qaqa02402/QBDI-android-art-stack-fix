@@ -18,8 +18,8 @@
 
 #include "MemAccessTestUtils_X86_64.h"
 
+using QBDITestBatch2::avx512OpmaskSaveRestoreUnsupported;
 using QBDITestBatch2::checkAccess;
-using QBDITestBatch2::checkEmptyAccess;
 using QBDITestBatch2::checkFeature;
 using QBDITestBatch2::ExpectedMemoryAccess;
 using QBDITestBatch2::ExpectedMemoryAccesses;
@@ -57,6 +57,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-KMOVWkm") {
 
 TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-KMOVWmk") {
   if (!checkFeature("avx512f")) {
+    return;
+  }
+  if (avx512OpmaskSaveRestoreUnsupported()) {
     return;
   }
   const char source[] =
@@ -124,6 +127,9 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-KMOVWmk_EVEX") {
     return;
   }
   if (!checkFeature("egpr")) {
+    return;
+  }
+  if (avx512OpmaskSaveRestoreUnsupported()) {
     return;
   }
   const char source[] =

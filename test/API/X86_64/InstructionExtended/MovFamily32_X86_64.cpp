@@ -19,7 +19,6 @@
 #include "MemAccessTestUtils_X86_64.h"
 
 using QBDITestBatch2::checkAccess;
-using QBDITestBatch2::checkEmptyAccess;
 using QBDITestBatch2::checkFeature;
 using QBDITestBatch2::ExpectedMemoryAccess;
 using QBDITestBatch2::ExpectedMemoryAccesses;
@@ -170,6 +169,61 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-MOV32rm") {
   CHECK(ran);
   QBDI::GPRState *finalState = vm.getGPRState();
   CHECK((finalState->rax & 0xffffffff) == 0x2c2c2c2c);
+  for (auto &e : expectedPre.accesses)
+    CHECK(e.see);
+  for (auto &e : expectedPost.accesses)
+    CHECK(e.see);
+}
+
+TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-MOVSX16rm32") {
+  // movslq 0x11(%rbx,%rsi,4), %ax
+  const char source[] = ".byte 0x66,0x63,0x84,0xb3,0x11,0x00,0x00,0x00\n";
+  uint8_t buffer[48] = {0};
+  uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
+  *target = 0x01020304;
+  QBDI::rword targetAddr = (QBDI::rword)target;
+  ExpectedMemoryAccesses expectedPre = {{
+      {targetAddr, 0x01020304, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
+  }};
+  ExpectedMemoryAccesses expectedPost = expectedPre;
+  vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
+  vm.addMnemonicCB("MOVSX16rm32", QBDI::PREINST, checkAccess, &expectedPre);
+  vm.addMnemonicCB("MOVSX16rm32", QBDI::POSTINST, checkAccess, &expectedPost);
+  QBDI::GPRState *state = vm.getGPRState();
+  state->rbx = (QBDI::rword)&buffer[0];
+  state->rsi = 1;
+  vm.setGPRState(state);
+  QBDI::rword retval;
+  bool ran = runOnASM(&retval, source);
+  CHECK(ran);
+  for (auto &e : expectedPre.accesses)
+    CHECK(e.see);
+  for (auto &e : expectedPost.accesses)
+    CHECK(e.see);
+}
+
+TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-MOVSX32rm32") {
+  // movslq 0x11(%rbx,%rsi,4), %eax
+  const char source[] = ".byte 0x63,0x84,0xb3,0x11,0x00,0x00,0x00\n";
+  uint8_t buffer[48] = {0};
+  uint32_t *target = reinterpret_cast<uint32_t *>(&buffer[21]);
+  *target = 0x01020304;
+  QBDI::rword targetAddr = (QBDI::rword)target;
+  ExpectedMemoryAccesses expectedPre = {{
+      {targetAddr, 0x01020304, 4, QBDI::MEMORY_READ, QBDI::MEMORY_NO_FLAGS},
+  }};
+  ExpectedMemoryAccesses expectedPost = expectedPre;
+  vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
+  vm.addMnemonicCB("MOVSX32rm32", QBDI::PREINST, checkAccess, &expectedPre);
+  vm.addMnemonicCB("MOVSX32rm32", QBDI::POSTINST, checkAccess, &expectedPost);
+  QBDI::GPRState *state = vm.getGPRState();
+  state->rbx = (QBDI::rword)&buffer[0];
+  state->rsi = 1;
+  vm.setGPRState(state);
+  QBDI::rword retval;
+  bool ran = runOnASM(&retval, source);
+  CHECK(ran);
+  CHECK((vm.getGPRState()->rax & 0xffffffff) == 0x01020304);
   for (auto &e : expectedPre.accesses)
     CHECK(e.see);
   for (auto &e : expectedPost.accesses)

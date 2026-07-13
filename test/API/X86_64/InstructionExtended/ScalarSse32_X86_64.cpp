@@ -19,7 +19,6 @@
 #include "MemAccessTestUtils_X86_64.h"
 
 using QBDITestBatch2::checkAccess;
-using QBDITestBatch2::checkEmptyAccess;
 using QBDITestBatch2::checkFeature;
 using QBDITestBatch2::ExpectedMemoryAccess;
 using QBDITestBatch2::ExpectedMemoryAccesses;
@@ -714,7 +713,7 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-MOVSSmr") {
 }
 
 TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-MOVNTSS") {
-  if (!checkFeature("sse")) {
+  if (!checkFeature("sse4a")) {
     return;
   }
   const char source[] = "movntss %xmm0, 0x11(%rbx,%rsi,4)\n";

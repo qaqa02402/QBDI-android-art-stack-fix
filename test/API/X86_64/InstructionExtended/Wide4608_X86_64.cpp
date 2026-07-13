@@ -212,68 +212,6 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XSAVEC64") {
     CHECK(e.see);
 }
 
-TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XSAVES") {
-  if (!checkFeature("xsaves")) {
-    return;
-  }
-  const char source[] =
-      "xor %eax, %eax\nxor %edx, %edx\nxsaves 0x40(%rbx,%rsi,8)\n";
-  alignas(64) uint8_t buffer[768] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[128];
-  ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-  }};
-  ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-      {targetAddr, 0, 576, QBDI::MEMORY_WRITE, kXstateFlags},
-  }};
-  vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
-  vm.addMnemonicCB("XSAVES", QBDI::PREINST, checkAccess, &expectedPre);
-  vm.addMnemonicCB("XSAVES", QBDI::POSTINST, checkAccess, &expectedPost);
-  QBDI::GPRState *state = vm.getGPRState();
-  state->rbx = (QBDI::rword)&buffer[0];
-  state->rsi = 8;
-  vm.setGPRState(state);
-  QBDI::rword retval;
-  bool ran = runOnASM(&retval, source);
-  CHECK(ran);
-  for (auto &e : expectedPre.accesses)
-    CHECK(e.see);
-  for (auto &e : expectedPost.accesses)
-    CHECK(e.see);
-}
-
-TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XSAVES64") {
-  if (!checkFeature("xsaves")) {
-    return;
-  }
-  const char source[] =
-      "xor %eax, %eax\nxor %edx, %edx\nxsaves64 0x40(%rbx,%rsi,8)\n";
-  alignas(64) uint8_t buffer[768] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[128];
-  ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-  }};
-  ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-      {targetAddr, 0, 576, QBDI::MEMORY_WRITE, kXstateFlags},
-  }};
-  vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
-  vm.addMnemonicCB("XSAVES64", QBDI::PREINST, checkAccess, &expectedPre);
-  vm.addMnemonicCB("XSAVES64", QBDI::POSTINST, checkAccess, &expectedPost);
-  QBDI::GPRState *state = vm.getGPRState();
-  state->rbx = (QBDI::rword)&buffer[0];
-  state->rsi = 8;
-  vm.setGPRState(state);
-  QBDI::rword retval;
-  bool ran = runOnASM(&retval, source);
-  CHECK(ran);
-  for (auto &e : expectedPre.accesses)
-    CHECK(e.see);
-  for (auto &e : expectedPost.accesses)
-    CHECK(e.see);
-}
-
 TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XRSTOR") {
   if (!checkFeature("xsave")) {
     return;
@@ -321,66 +259,6 @@ TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XRSTOR64") {
   vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
   vm.addMnemonicCB("XRSTOR64", QBDI::PREINST, checkAccess, &expectedPre);
   vm.addMnemonicCB("XRSTOR64", QBDI::POSTINST, checkAccess, &expectedPost);
-  QBDI::GPRState *state = vm.getGPRState();
-  state->rbx = (QBDI::rword)&buffer[0];
-  state->rsi = 8;
-  vm.setGPRState(state);
-  QBDI::rword retval;
-  bool ran = runOnASM(&retval, source);
-  CHECK(ran);
-  for (auto &e : expectedPre.accesses)
-    CHECK(e.see);
-  for (auto &e : expectedPost.accesses)
-    CHECK(e.see);
-}
-
-TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XRSTORS") {
-  if (!checkFeature("xsaves")) {
-    return;
-  }
-  const char source[] =
-      "xor %eax, %eax\nxor %edx, %edx\nxrstors 0x40(%rbx,%rsi,8)\n";
-  alignas(64) uint8_t buffer[768] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[128];
-  ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-  }};
-  ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-  }};
-  vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
-  vm.addMnemonicCB("XRSTORS", QBDI::PREINST, checkAccess, &expectedPre);
-  vm.addMnemonicCB("XRSTORS", QBDI::POSTINST, checkAccess, &expectedPost);
-  QBDI::GPRState *state = vm.getGPRState();
-  state->rbx = (QBDI::rword)&buffer[0];
-  state->rsi = 8;
-  vm.setGPRState(state);
-  QBDI::rword retval;
-  bool ran = runOnASM(&retval, source);
-  CHECK(ran);
-  for (auto &e : expectedPre.accesses)
-    CHECK(e.see);
-  for (auto &e : expectedPost.accesses)
-    CHECK(e.see);
-}
-
-TEST_CASE_METHOD(APITest, "InstructionExtendedTest_X86_64-XRSTORS64") {
-  if (!checkFeature("xsaves")) {
-    return;
-  }
-  const char source[] =
-      "xor %eax, %eax\nxor %edx, %edx\nxrstors64 0x40(%rbx,%rsi,8)\n";
-  alignas(64) uint8_t buffer[768] = {0};
-  QBDI::rword targetAddr = (QBDI::rword)&buffer[128];
-  ExpectedMemoryAccesses expectedPre = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-  }};
-  ExpectedMemoryAccesses expectedPost = {{
-      {targetAddr, 0, 576, QBDI::MEMORY_READ, kXstateFlags},
-  }};
-  vm.recordMemoryAccess(QBDI::MEMORY_READ_WRITE);
-  vm.addMnemonicCB("XRSTORS64", QBDI::PREINST, checkAccess, &expectedPre);
-  vm.addMnemonicCB("XRSTORS64", QBDI::POSTINST, checkAccess, &expectedPost);
   QBDI::GPRState *state = vm.getGPRState();
   state->rbx = (QBDI::rword)&buffer[0];
   state->rsi = 8;

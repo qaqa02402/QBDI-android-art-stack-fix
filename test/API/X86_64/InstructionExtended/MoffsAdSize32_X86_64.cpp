@@ -18,14 +18,22 @@
 
 #include "MemAccessTestUtils_X86_64.h"
 
+#include "QBDI/Config.h"
+
 #include <cstdint>
 #include <cstdio>
 
-#if defined(__linux__)
+#if defined(QBDI_PLATFORM_LINUX)
 #include <sys/mman.h>
 #ifndef MAP_32BIT
 #define MAP_32BIT 0x40
 #endif
+#elif defined(QBDI_PLATFORM_MACOS)
+#include <sys/mman.h>
+#elif defined(QBDI_PLATFORM_WINDOWS)
+#include <windows.h>
+
+#include <memoryapi.h>
 #endif
 
 using QBDITestBatch2::checkAccess;
@@ -39,10 +47,37 @@ public:
   static constexpr size_t kSize = 4096;
 
   Low32BitBuffer() {
-#if defined(__linux__)
+#if defined(QBDI_PLATFORM_LINUX)
     void *p = mmap(nullptr, kSize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
     if (p != MAP_FAILED &&
+        (reinterpret_cast<uintptr_t>(p) + kSize) < 0x100000000ULL) {
+      ptr_ = static_cast<uint8_t *>(p);
+    }
+#elif defined(QBDI_PLATFORM_MACOS)
+    // no MAP_32BIT on macOS: pass a low hint address without MAP_FIXED,
+    // honored on a best-effort basis by the kernel.
+    void *hint = reinterpret_cast<void *>(0x10000000ULL);
+    void *p = mmap(hint, kSize, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p != MAP_FAILED) {
+      if ((reinterpret_cast<uintptr_t>(p) + kSize) < 0x100000000ULL) {
+        ptr_ = static_cast<uint8_t *>(p);
+      } else {
+        munmap(p, kSize);
+      }
+    }
+#elif defined(QBDI_PLATFORM_WINDOWS)
+    MEM_ADDRESS_REQUIREMENTS addrReq = {};
+    addrReq.LowestStartingAddress = nullptr;
+    addrReq.HighestEndingAddress = reinterpret_cast<PVOID>(0xffffffffULL);
+    addrReq.Alignment = 0;
+    MEM_EXTENDED_PARAMETER param = {};
+    param.Type = MemExtendedParameterAddressRequirements;
+    param.Pointer = &addrReq;
+    void *p = VirtualAlloc2(nullptr, nullptr, kSize, MEM_RESERVE | MEM_COMMIT,
+                            PAGE_READWRITE, &param, 1);
+    if (p != nullptr &&
         (reinterpret_cast<uintptr_t>(p) + kSize) < 0x100000000ULL) {
       ptr_ = static_cast<uint8_t *>(p);
     }
@@ -50,9 +85,13 @@ public:
   }
 
   ~Low32BitBuffer() {
-#if defined(__linux__)
+#if defined(QBDI_PLATFORM_LINUX) or defined(QBDI_PLATFORM_MACOS)
     if (ptr_ != nullptr) {
       munmap(ptr_, kSize);
+    }
+#elif defined(QBDI_PLATFORM_WINDOWS)
+    if (ptr_ != nullptr) {
+      VirtualFree(ptr_, 0, MEM_RELEASE);
     }
 #endif
   }
