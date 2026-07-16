@@ -1,7 +1,7 @@
 /*
  * This file is part of QBDI.
  *
- * Copyright 2017 - 2025 Quarkslab
+ * Copyright 2017 - 2026 Quarkslab
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -122,10 +122,11 @@ public:
 };
 
 class CondExclusifLoad : public AutoClone<PatchGenerator, CondExclusifLoad> {
-  Temp tmp;
+  Temp temp;
+  Temp temp2;
 
 public:
-  CondExclusifLoad(Temp tmp) : tmp(tmp) {}
+  CondExclusifLoad(Temp temp, Temp temp2) : temp(temp), temp2(temp2) {}
 
   std::vector<std::unique_ptr<RelocatableInst>>
   generate(const Patch &patch, TempManager &temp_manager) const override;

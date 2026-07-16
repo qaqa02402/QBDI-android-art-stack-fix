@@ -1,7 +1,7 @@
 /*
  * This file is part of QBDI.
  *
- * Copyright 2017 - 2025 Quarkslab
+ * Copyright 2017 - 2026 Quarkslab
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "Engine/LLVMCPU.h"
 #include "ExecBlock/ExecBlock.h"
 #include "Patch/ARM/Layer2_ARM.h"
+#include "Patch/ARM/MemoryAccess_ARM.h"
 #include "Patch/ARM/PatchGenerator_ARM.h"
 #include "Patch/ARM/RelocatableInst_ARM.h"
 #include "Patch/InstInfo.h"
@@ -372,6 +373,8 @@ constexpr unsigned ADDR_REG_3_TABLE[] = {
     llvm::ARM::STREXB,
     llvm::ARM::STREXD,
     llvm::ARM::STREXH,
+    llvm::ARM::STRHTi,
+    llvm::ARM::STRHTr,
     llvm::ARM::STRH_POST,
     llvm::ARM::STRT_POST_IMM,
     llvm::ARM::STRT_POST_REG,
@@ -785,8 +788,12 @@ constexpr unsigned ADDR_REG_2_SIMM_3_TABLE[] = {
     llvm::ARM::VSTR_VPR_post,
     // unsigned imm8
     llvm::ARM::t2LDRBT,
+    llvm::ARM::t2LDRHT,
+    llvm::ARM::t2LDRSBT,
+    llvm::ARM::t2LDRSHT,
     llvm::ARM::t2LDRT,
     llvm::ARM::t2STRBT,
+    llvm::ARM::t2STRHT,
     llvm::ARM::t2STRT,
     // unsigned imm12
     llvm::ARM::t2LDRBi12,
@@ -1722,17 +1729,6 @@ RelocatableInst::UniquePtrVec generateAddressPatch(const Patch &patch,
 
 namespace {
 
-enum MemoryTag : uint16_t {
-  MEN_COND_REACH_TAG = MEMORY_TAG_BEGIN + 0,
-
-  MEM_READ_ADDRESS_TAG = MEMORY_TAG_BEGIN + 1,
-  MEM_WRITE_ADDRESS_TAG = MEMORY_TAG_BEGIN + 2,
-
-  MEM_READ_VALUE_TAG = MEMORY_TAG_BEGIN + 3,
-  MEM_WRITE_VALUE_TAG = MEMORY_TAG_BEGIN + 4,
-  MEM_VALUE_EXTENDED_TAG = MEMORY_TAG_BEGIN + 5,
-};
-
 const PatchGenerator::UniquePtrVec &
 generateReadInstrumentPatch(Patch &patch, const LLVMCPU &llvmcpu) {
   if (llvmcpu.hasOptions(Options::OPT_DISABLE_MEMORYACCESS_VALUE)) {
@@ -2596,11 +2592,17 @@ void analyseMemoryAccessAddrValue(const ExecBlock &curExecBlock,
       llvmcpu.hasOptions(Options::OPT_DISABLE_MEMORYACCESS_VALUE)) {
     access.value = 0;
     access.flags |= MEMORY_UNKNOWN_VALUE;
-    // search if the shadow MEN_COND_REACH_TAG is present
-    // drop the access if the condition of the instruction isn't reached.
+    // search if the shadow MEM_EXCLUSIVE_STATUS_TAG or MEN_COND_REACH_TAG is
+    // present, and drop the access if the exclusive store failed or the
+    // condition of the instruction isn't reached.
     for (const ShadowInfo &info : shadows) {
       if (shadows[0].instID != info.instID) {
         break;
+      }
+      if (info.tag == MEM_EXCLUSIVE_STATUS_TAG) {
+        if (curExecBlock.getShadow(info.shadowID) != 0) {
+          return;
+        }
       }
       if (info.tag == MEN_COND_REACH_TAG) {
         if (curExecBlock.getShadow(info.shadowID) != 1) {
@@ -2624,6 +2626,11 @@ void analyseMemoryAccessAddrValue(const ExecBlock &curExecBlock,
       return;
     }
     QBDI_REQUIRE_ACTION(shadows[0].instID == shadows[index].instID, return);
+
+    // if the exclusive store failed, drop the shadows.
+    if (shadows[index].tag == MEM_EXCLUSIVE_STATUS_TAG and
+        curExecBlock.getShadow(shadows[index].shadowID) != 0)
+      return;
 
     // if the instruction is conditionnal and the condition hasn't be reach,
     //  drop the shadows.

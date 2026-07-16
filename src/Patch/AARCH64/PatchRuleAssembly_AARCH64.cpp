@@ -1,7 +1,7 @@
 /*
  * This file is part of QBDI.
  *
- * Copyright 2017 - 2025 Quarkslab
+ * Copyright 2017 - 2026 Quarkslab
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,9 @@
 #include "AArch64InstrInfo.h"
 
 #include "Engine/LLVMCPU.h"
+#include "Patch/AARCH64/InstTransform_AARCH64.h"
 #include "Patch/AARCH64/Layer2_AARCH64.h"
+#include "Patch/AARCH64/MemoryAccess_AARCH64.h"
 #include "Patch/AARCH64/PatchGenerator_AARCH64.h"
 #include "Patch/InstTransform.h"
 #include "Patch/PatchCondition.h"
@@ -361,18 +363,12 @@ std::vector<PatchRule> getDefaultPatchRules(Options opts) {
                 Offset(offsetof(Context, gprState.localMonitor.enable))),
             SaveX28IfSet::unique()));
 
-    /* Rule #14: exclusive load 1 register
+    /* Rule #14: exclusive load 1 byte register
      */
     rules.emplace_back(
         Or::unique(
             conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::LDXRB),
-                                        OpIs::unique(llvm::AArch64::LDXRH),
-                                        OpIs::unique(llvm::AArch64::LDXRW),
-                                        OpIs::unique(llvm::AArch64::LDXRX),
-                                        OpIs::unique(llvm::AArch64::LDAXRB),
-                                        OpIs::unique(llvm::AArch64::LDAXRH),
-                                        OpIs::unique(llvm::AArch64::LDAXRW),
-                                        OpIs::unique(llvm::AArch64::LDAXRX))),
+                                        OpIs::unique(llvm::AArch64::LDAXRB))),
         conv_unique<PatchGenerator>(
             GetConstant::unique(Temp(0), Constant(1)),
             WriteTemp::unique(
@@ -384,16 +380,65 @@ std::vector<PatchRule> getDefaultPatchRules(Options opts) {
             ModifyInstruction::unique(InstTransform::UniquePtrVec()),
             SaveX28IfSet::unique()));
 
-    /* Rule #15: exclusive load 2 register
+    /* Rule #15: exclusive load 1 halfword register
+     */
+    rules.emplace_back(
+        Or::unique(
+            conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::LDXRH),
+                                        OpIs::unique(llvm::AArch64::LDAXRH))),
+        conv_unique<PatchGenerator>(
+            GetConstant::unique(Temp(0), Constant(2)),
+            WriteTemp::unique(
+                Temp(0),
+                Offset(offsetof(Context, gprState.localMonitor.enable))),
+            WriteOperand::unique(
+                Operand(1),
+                Offset(offsetof(Context, gprState.localMonitor.addr))),
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            SaveX28IfSet::unique()));
+
+    /* Rule #16: exclusive load 1 word register
+     */
+    rules.emplace_back(
+        Or::unique(
+            conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::LDXRW),
+                                        OpIs::unique(llvm::AArch64::LDAXRW))),
+        conv_unique<PatchGenerator>(
+            GetConstant::unique(Temp(0), Constant(4)),
+            WriteTemp::unique(
+                Temp(0),
+                Offset(offsetof(Context, gprState.localMonitor.enable))),
+            WriteOperand::unique(
+                Operand(1),
+                Offset(offsetof(Context, gprState.localMonitor.addr))),
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            SaveX28IfSet::unique()));
+
+    /* Rule #17: exclusive load 1 doubleword register
+     */
+    rules.emplace_back(
+        Or::unique(
+            conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::LDXRX),
+                                        OpIs::unique(llvm::AArch64::LDAXRX))),
+        conv_unique<PatchGenerator>(
+            GetConstant::unique(Temp(0), Constant(8)),
+            WriteTemp::unique(
+                Temp(0),
+                Offset(offsetof(Context, gprState.localMonitor.enable))),
+            WriteOperand::unique(
+                Operand(1),
+                Offset(offsetof(Context, gprState.localMonitor.addr))),
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            SaveX28IfSet::unique()));
+
+    /* Rule #18: exclusive load 2 word registers
      */
     rules.emplace_back(
         Or::unique(
             conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::LDXPW),
-                                        OpIs::unique(llvm::AArch64::LDXPX),
-                                        OpIs::unique(llvm::AArch64::LDAXPW),
-                                        OpIs::unique(llvm::AArch64::LDAXPX))),
+                                        OpIs::unique(llvm::AArch64::LDAXPW))),
         conv_unique<PatchGenerator>(
-            GetConstant::unique(Temp(0), Constant(1)),
+            GetConstant::unique(Temp(0), Constant(0x800)),
             WriteTemp::unique(
                 Temp(0),
                 Offset(offsetof(Context, gprState.localMonitor.enable))),
@@ -403,29 +448,128 @@ std::vector<PatchRule> getDefaultPatchRules(Options opts) {
             ModifyInstruction::unique(InstTransform::UniquePtrVec()),
             SaveX28IfSet::unique()));
 
-    /* Rule #16: exclusive store
+    /* Rule #19: exclusive load 2 doubleword registers
      */
     rules.emplace_back(
         Or::unique(
-            conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::STXRB),
-                                        OpIs::unique(llvm::AArch64::STXRH),
-                                        OpIs::unique(llvm::AArch64::STXRW),
-                                        OpIs::unique(llvm::AArch64::STXRX),
-                                        OpIs::unique(llvm::AArch64::STXPW),
-                                        OpIs::unique(llvm::AArch64::STXPX),
-                                        OpIs::unique(llvm::AArch64::STLXRB),
-                                        OpIs::unique(llvm::AArch64::STLXRH),
-                                        OpIs::unique(llvm::AArch64::STLXRW),
-                                        OpIs::unique(llvm::AArch64::STLXRX),
-                                        OpIs::unique(llvm::AArch64::STLXPW),
-                                        OpIs::unique(llvm::AArch64::STLXPX))),
+            conv_unique<PatchCondition>(OpIs::unique(llvm::AArch64::LDXPX),
+                                        OpIs::unique(llvm::AArch64::LDAXPX))),
         conv_unique<PatchGenerator>(
-            CondExclusifLoad::unique(Temp(0)),
+            GetConstant::unique(Temp(0), Constant(16)),
+            WriteTemp::unique(
+                Temp(0),
+                Offset(offsetof(Context, gprState.localMonitor.enable))),
+            WriteOperand::unique(
+                Operand(2),
+                Offset(offsetof(Context, gprState.localMonitor.addr))),
             ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            SaveX28IfSet::unique()));
+
+    /* Rule #20: exclusive store register(s)
+     */
+    rules.emplace_back(
+        And::unique(conv_unique<PatchCondition>(
+            Or::unique(conv_unique<PatchCondition>(
+                OpIs::unique(llvm::AArch64::STXRB),
+                OpIs::unique(llvm::AArch64::STLXRB),
+                OpIs::unique(llvm::AArch64::STXRH),
+                OpIs::unique(llvm::AArch64::STLXRH),
+                OpIs::unique(llvm::AArch64::STXRW),
+                OpIs::unique(llvm::AArch64::STLXRW),
+                OpIs::unique(llvm::AArch64::STXRX),
+                OpIs::unique(llvm::AArch64::STLXRX),
+                OpIs::unique(llvm::AArch64::STXPW),
+                OpIs::unique(llvm::AArch64::STLXPW),
+                OpIs::unique(llvm::AArch64::STXPX),
+                OpIs::unique(llvm::AArch64::STLXPX))),
+            OperandIs::unique(0, RegLLVM(llvm::AArch64::WZR)))),
+        conv_unique<PatchGenerator>(
+            CondExclusifLoad::unique(Temp(0), Temp(1)),
+            ModifyInstruction::unique(conv_unique<InstTransform>(
+                SetOperandW::unique(Operand(0), Temp(0)))),
+            WriteTemp::unique(Temp(0), Shadow(MEM_EXCLUSIVE_STATUS_TAG)),
             GetConstant::unique(Temp(0), Constant(0)),
             WriteTemp::unique(
                 Temp(0),
                 Offset(offsetof(Context, gprState.localMonitor.enable))),
+            SaveX28IfSet::unique()));
+
+    /* Rule #21: exclusive store register(s)
+     */
+    rules.emplace_back(
+        And::unique(conv_unique<PatchCondition>(
+            Or::unique(conv_unique<PatchCondition>(
+                OpIs::unique(llvm::AArch64::STXRB),
+                OpIs::unique(llvm::AArch64::STLXRB),
+                OpIs::unique(llvm::AArch64::STXRH),
+                OpIs::unique(llvm::AArch64::STLXRH),
+                OpIs::unique(llvm::AArch64::STXRW),
+                OpIs::unique(llvm::AArch64::STLXRW),
+                OpIs::unique(llvm::AArch64::STXRX),
+                OpIs::unique(llvm::AArch64::STLXRX),
+                OpIs::unique(llvm::AArch64::STXPW),
+                OpIs::unique(llvm::AArch64::STLXPW),
+                OpIs::unique(llvm::AArch64::STXPX),
+                OpIs::unique(llvm::AArch64::STLXPX))),
+            Not::unique(OperandIs::unique(0, RegLLVM(llvm::AArch64::WZR))))),
+        conv_unique<PatchGenerator>(
+            CondExclusifLoad::unique(Temp(0), Temp(1)),
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            WriteOperand::unique(Operand(0), Shadow(MEM_EXCLUSIVE_STATUS_TAG)),
+            GetConstant::unique(Temp(0), Constant(0)),
+            WriteTemp::unique(
+                Temp(0),
+                Offset(offsetof(Context, gprState.localMonitor.enable))),
+            SaveX28IfSet::unique()));
+  } else {
+
+    /* Rule #20b: exclusive store register(s)
+     * status register is XZR
+     */
+    rules.emplace_back(
+        And::unique(conv_unique<PatchCondition>(
+            Or::unique(conv_unique<PatchCondition>(
+                OpIs::unique(llvm::AArch64::STXRB),
+                OpIs::unique(llvm::AArch64::STLXRB),
+                OpIs::unique(llvm::AArch64::STXRH),
+                OpIs::unique(llvm::AArch64::STLXRH),
+                OpIs::unique(llvm::AArch64::STXRW),
+                OpIs::unique(llvm::AArch64::STLXRW),
+                OpIs::unique(llvm::AArch64::STXRX),
+                OpIs::unique(llvm::AArch64::STLXRX),
+                OpIs::unique(llvm::AArch64::STXPW),
+                OpIs::unique(llvm::AArch64::STLXPW),
+                OpIs::unique(llvm::AArch64::STXPX),
+                OpIs::unique(llvm::AArch64::STLXPX))),
+            OperandIs::unique(0, RegLLVM(llvm::AArch64::WZR)))),
+        conv_unique<PatchGenerator>(
+            ModifyInstruction::unique(conv_unique<InstTransform>(
+                SetOperandW::unique(Operand(0), Temp(0)))),
+            WriteTemp::unique(Temp(0), Shadow(MEM_EXCLUSIVE_STATUS_TAG)),
+            SaveX28IfSet::unique()));
+
+    /* Rule #21b: exclusive store register(s)
+     * status register isn't XZR
+     */
+    rules.emplace_back(
+        And::unique(conv_unique<PatchCondition>(
+            Or::unique(conv_unique<PatchCondition>(
+                OpIs::unique(llvm::AArch64::STXRB),
+                OpIs::unique(llvm::AArch64::STLXRB),
+                OpIs::unique(llvm::AArch64::STXRH),
+                OpIs::unique(llvm::AArch64::STLXRH),
+                OpIs::unique(llvm::AArch64::STXRW),
+                OpIs::unique(llvm::AArch64::STLXRW),
+                OpIs::unique(llvm::AArch64::STXRX),
+                OpIs::unique(llvm::AArch64::STLXRX),
+                OpIs::unique(llvm::AArch64::STXPW),
+                OpIs::unique(llvm::AArch64::STLXPW),
+                OpIs::unique(llvm::AArch64::STXPX),
+                OpIs::unique(llvm::AArch64::STLXPX))),
+            Not::unique(OperandIs::unique(0, RegLLVM(llvm::AArch64::WZR))))),
+        conv_unique<PatchGenerator>(
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            WriteOperand::unique(Operand(0), Shadow(MEM_EXCLUSIVE_STATUS_TAG)),
             SaveX28IfSet::unique()));
   }
 

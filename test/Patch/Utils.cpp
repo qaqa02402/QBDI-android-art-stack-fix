@@ -1,7 +1,7 @@
 /*
  * This file is part of QBDI.
  *
- * Copyright 2017 - 2025 Quarkslab
+ * Copyright 2017 - 2026 Quarkslab
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,6 @@ QBDI::rword get_random() {
   if constexpr (QBDI::it_bits_32) {
     return rand();
   } else {
-    return ((uint64_t)rand()) << 32 || rand();
+    return ((uint64_t)rand()) << 32 | rand();
   }
 }

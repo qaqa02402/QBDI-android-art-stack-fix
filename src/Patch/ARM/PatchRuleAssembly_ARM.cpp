@@ -1,7 +1,7 @@
 /*
  * This file is part of QBDI.
  *
- * Copyright 2017 - 2025 Quarkslab
+ * Copyright 2017 - 2026 Quarkslab
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include "Engine/LLVMCPU.h"
 #include "Patch/ARM/InstInfo_ARM.h"
 #include "Patch/ARM/Layer2_ARM.h"
+#include "Patch/ARM/MemoryAccess_ARM.h"
 #include "Patch/ARM/PatchCondition_ARM.h"
 #include "Patch/ARM/PatchGenerator_ARM.h"
 #include "Patch/ExecBlockFlags.h"
@@ -351,19 +352,33 @@ std::vector<PatchRule> getARMPatchRules(Options opts) {
                 Offset(offsetof(Context, gprState.localMonitor.addr))),
             ModifyInstruction::unique(InstTransform::UniquePtrVec())));
 
-    /* Rule #14: exclusive store
+    /* Rule #14: exclusive store register(s)
      */
     rules.emplace_back(
         Or::unique(conv_unique<PatchCondition>(
-            OpIs::unique(llvm::ARM::STREX), OpIs::unique(llvm::ARM::STREXB),
-            OpIs::unique(llvm::ARM::STREXD), OpIs::unique(llvm::ARM::STREXH))),
+            OpIs::unique(llvm::ARM::STREXB), OpIs::unique(llvm::ARM::STREXH),
+            OpIs::unique(llvm::ARM::STREX), OpIs::unique(llvm::ARM::STREXD))),
         conv_unique<PatchGenerator>(
-            CondExclusifLoad::unique(Temp(0), Temp(1)),
+            CondExclusifLoad::unique(Temp(0), Temp(1), Temp(2)),
             ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            WriteOperandCC::unique(Operand(0),
+                                   Shadow(MEM_EXCLUSIVE_STATUS_TAG)),
             GetConstant::unique(Temp(0), Constant(0)),
             WriteTempCC::unique(
                 Temp(0),
                 Offset(offsetof(Context, gprState.localMonitor.enable)))));
+  } else {
+
+    /* Rule #14b: exclusive store register(s), local monitor disabled
+     */
+    rules.emplace_back(
+        Or::unique(conv_unique<PatchCondition>(
+            OpIs::unique(llvm::ARM::STREXB), OpIs::unique(llvm::ARM::STREXH),
+            OpIs::unique(llvm::ARM::STREX), OpIs::unique(llvm::ARM::STREXD))),
+        conv_unique<PatchGenerator>(
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            WriteOperandCC::unique(Operand(0),
+                                   Shadow(MEM_EXCLUSIVE_STATUS_TAG))));
   }
 
   // Instruction without PC
@@ -1222,20 +1237,37 @@ std::vector<PatchRule> getThumbPatchRules(Options opts) {
             ItPatch::unique(false),
             ModifyInstruction::unique(InstTransform::UniquePtrVec())));
 
-    /* Rule #32: exclusive store
+    /* Rule #32: exclusive store register(s)
      */
     rules.emplace_back(
         Or::unique(conv_unique<PatchCondition>(
-            OpIs::unique(llvm::ARM::t2STREX), OpIs::unique(llvm::ARM::t2STREXB),
-            OpIs::unique(llvm::ARM::t2STREXD),
-            OpIs::unique(llvm::ARM::t2STREXH))),
+            OpIs::unique(llvm::ARM::t2STREXB),
+            OpIs::unique(llvm::ARM::t2STREXH), OpIs::unique(llvm::ARM::t2STREX),
+            OpIs::unique(llvm::ARM::t2STREXD))),
         conv_unique<PatchGenerator>(
-            CondExclusifLoad::unique(Temp(0), Temp(1)), ItPatch::unique(false),
+            CondExclusifLoad::unique(Temp(0), Temp(1), Temp(2)),
+            ItPatch::unique(false),
             ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            WriteOperandCC::unique(Operand(0),
+                                   Shadow(MEM_EXCLUSIVE_STATUS_TAG)),
             GetConstant::unique(Temp(0), Constant(0)),
             WriteTempCC::unique(
                 Temp(0),
                 Offset(offsetof(Context, gprState.localMonitor.enable)))));
+  } else {
+
+    /* Rule #32b: exclusive store register(s), local monitor disabled
+     */
+    rules.emplace_back(
+        Or::unique(conv_unique<PatchCondition>(
+            OpIs::unique(llvm::ARM::t2STREXB),
+            OpIs::unique(llvm::ARM::t2STREXH), OpIs::unique(llvm::ARM::t2STREX),
+            OpIs::unique(llvm::ARM::t2STREXD))),
+        conv_unique<PatchGenerator>(
+            ItPatch::unique(false),
+            ModifyInstruction::unique(InstTransform::UniquePtrVec()),
+            WriteOperandCC::unique(Operand(0),
+                                   Shadow(MEM_EXCLUSIVE_STATUS_TAG))));
   }
 
   // Instruction with no PC
