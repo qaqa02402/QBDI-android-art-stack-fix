@@ -44,14 +44,34 @@ Useful commands:
 
 ```sh
 adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro switch-callstatic'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro call-findclass'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro call-getmethodid'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro allocator-stress'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro allocator-threaded'
+adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro switch-stress'
 adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro lowcall-pending'
 adb shell 'CLASSPATH=/data/local/tmp/qbdi-art-stack/repro.jar app_process64 /data/local/tmp/qbdi-art-stack Repro stringret'
+```
+
+Run the complete device regression, including the expected low-stack failure:
+
+```sh
+repro/android-art-stack/run-device-tests.sh
 ```
 
 Observed results on Pixel 6 / Android 14:
 
 - `switch-callstatic` returns `42`.
-- `lowcall-pending` aborts with `No pending exception expected:
-  java.lang.StackOverflowError: stack size 8188KB`.
+- `call-findclass` and `call-getmethodid` complete without an ART stack overflow.
+- `allocator-stress` allocates 32 guarded virtual stacks, verifies alignment and
+  overlap, then reports total and average allocation latency.
+- `allocator-threaded` validates concurrent allocation and release from four
+  Android threads.
+- `switch-stress` performs 64 calls on one VM and reports the average latency,
+  covering reuse of the VM-owned engine stack.
+- `lowcall-pending` and `call-pending` execute the same JNI target. The
+  hard-coded low-address stack must abort with `No pending exception expected:
+  java.lang.StackOverflowError: stack size 8188KB`; the allocator-provided
+  high-address stack must return `1` without a pending exception.
 - `stringret` exits with `SIGSEGV`, demonstrating that `VM::call` cannot infer
   the hidden return-buffer ABI for non-trivial C++ return values.

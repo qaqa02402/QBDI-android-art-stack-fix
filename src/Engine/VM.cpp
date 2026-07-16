@@ -495,11 +495,18 @@ bool VM::switchStackAndCallA(rword *retval, rword function, uint32_t argNum,
 
   QBDI_REQUIRE_ACTION(stackSize > 0x10000, return false);
 
-  GPRState stackState = {};
   uint8_t *fakestack = nullptr;
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+  fakestack = engine->getSwitchStack(stackSize);
+  if (fakestack == nullptr) {
+    return false;
+  }
+#else
+  GPRState stackState = {};
   if (!allocateVirtualStack(&stackState, stackSize, &fakestack)) {
     return false;
   }
+#endif
 
   bool res =
       switchStack(fakestack + stackSize - sizeof(rword), [&](rword stackPtr) {
@@ -511,7 +518,9 @@ bool VM::switchStackAndCallA(rword *retval, rword function, uint32_t argNum,
         return this->callA(retval, function, argNum, args);
       });
 
+#if !(defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64))
   QBDI::alignedFree(fakestack);
+#endif
   return res;
 }
 

@@ -5,10 +5,13 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <QBDI.h>
@@ -201,6 +204,124 @@ int runQBDISwitchStack(JNIEnv *env, const std::string &mode) {
   return callOk ? static_cast<int>(ret) : -21;
 }
 
+int runAllocatorStress() {
+  constexpr size_t kStackSize = 0x10000;
+  constexpr size_t kIterations = 32;
+  std::vector<uint8_t *> stacks;
+  stacks.reserve(kIterations);
+
+  timespec start = {};
+  timespec end = {};
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
+  for (size_t i = 0; i < kIterations; ++i) {
+    QBDI::GPRState state = {};
+    uint8_t *stack = nullptr;
+    if (!QBDI::allocateVirtualStack(&state, kStackSize, &stack)) {
+      return -40;
+    }
+
+    const uintptr_t stackAddress = reinterpret_cast<uintptr_t>(stack);
+    const uintptr_t stackPointer = QBDI_GPR_GET(&state, QBDI::REG_SP);
+    if ((stackPointer & 0xf) != 0 || stackPointer <= stackAddress) {
+      QBDI::alignedFree(stack);
+      return -41;
+    }
+
+    stack[0] = 0x42;
+    stack[kStackSize - 1] = 0x24;
+    for (uint8_t *previous : stacks) {
+      const uintptr_t previousAddress = reinterpret_cast<uintptr_t>(previous);
+      if (stackAddress < previousAddress + kStackSize &&
+          previousAddress < stackAddress + kStackSize) {
+        QBDI::alignedFree(stack);
+        return -42;
+      }
+    }
+    stacks.push_back(stack);
+  }
+
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  const int64_t elapsedNs =
+      static_cast<int64_t>(end.tv_sec - start.tv_sec) * 1000000000LL +
+      end.tv_nsec - start.tv_nsec;
+  std::printf("[native] allocator-stress iterations=%zu total_ns=%" PRIi64
+              " average_ns=%" PRIi64 "\n",
+              kIterations, elapsedNs, elapsedNs / kIterations);
+
+  for (uint8_t *stack : stacks) {
+    QBDI::alignedFree(stack);
+  }
+  return 0;
+}
+
+__attribute__((noinline)) int targetIncrement(int value) { return value + 1; }
+
+int runSwitchStackStress() {
+  constexpr size_t kIterations = 64;
+  QBDI::VM vm;
+  if (!vm.addInstrumentedModuleFromAddr(
+          reinterpret_cast<QBDI::rword>(&targetIncrement))) {
+    return -50;
+  }
+
+  timespec start = {};
+  timespec end = {};
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (size_t i = 0; i < kIterations; ++i) {
+    QBDI::rword result = 0;
+    if (!vm.switchStackAndCall(
+            &result, reinterpret_cast<QBDI::rword>(&targetIncrement), {i}) ||
+        result != i + 1) {
+      return -51;
+    }
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+
+  const int64_t elapsedNs =
+      static_cast<int64_t>(end.tv_sec - start.tv_sec) * 1000000000LL +
+      end.tv_nsec - start.tv_nsec;
+  std::printf("[native] switch-stress iterations=%zu total_ns=%" PRIi64
+              " average_ns=%" PRIi64 "\n",
+              kIterations, elapsedNs, elapsedNs / kIterations);
+  return 0;
+}
+
+int runThreadedAllocatorStress() {
+  constexpr size_t kThreadCount = 4;
+  constexpr size_t kIterations = 16;
+  constexpr size_t kStackSize = 0x10000;
+  std::atomic<uint32_t> failures{0};
+  std::vector<std::thread> threads;
+  threads.reserve(kThreadCount);
+
+  for (size_t threadIndex = 0; threadIndex < kThreadCount; ++threadIndex) {
+    threads.emplace_back([&failures]() {
+      for (size_t i = 0; i < kIterations; ++i) {
+        QBDI::GPRState state = {};
+        uint8_t *stack = nullptr;
+        if (!QBDI::allocateVirtualStack(&state, kStackSize, &stack) ||
+            reinterpret_cast<uintptr_t>(stack) <= currentSp()) {
+          failures.fetch_add(1, std::memory_order_relaxed);
+          return;
+        }
+        stack[0] = 0x42;
+        stack[kStackSize - 1] = 0x24;
+        QBDI::alignedFree(stack);
+      }
+    });
+  }
+
+  for (std::thread &thread : threads) {
+    thread.join();
+  }
+  std::printf(
+      "[native] allocator-threaded threads=%zu iterations=%zu "
+      "failures=%u\n",
+      kThreadCount, kIterations, failures.load());
+  return failures.load() == 0 ? 0 : -60;
+}
+
 __attribute__((noinline)) std::string targetStringReturn() {
   return std::string(
       "asdniwasdnklnweoinaszcnklwnoianaolsnclkwoanslclkwolalnksc");
@@ -328,6 +449,15 @@ extern "C" JNIEXPORT jint JNICALL Java_Repro_run(JNIEnv *env, jclass,
   if (mode == "stringret") {
     return runStringReturn();
   }
+  if (mode == "allocator-stress") {
+    return runAllocatorStress();
+  }
+  if (mode == "switch-stress") {
+    return runSwitchStackStress();
+  }
+  if (mode == "allocator-threaded") {
+    return runThreadedAllocatorStress();
+  }
   if (mode.find("native") == 0) {
     return runNative(env, mode);
   }
@@ -348,6 +478,12 @@ int main(int argc, char **argv) {
   int ret = 0;
   if (mode.find("native") == 0) {
     ret = runNative(env, mode);
+  } else if (mode == "allocator-stress") {
+    ret = runAllocatorStress();
+  } else if (mode == "switch-stress") {
+    ret = runSwitchStackStress();
+  } else if (mode == "allocator-threaded") {
+    ret = runThreadedAllocatorStress();
   } else if (mode.find("switch") == 0) {
     ret = runQBDISwitchStack(env, mode);
   } else {

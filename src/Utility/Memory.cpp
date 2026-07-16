@@ -15,8 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <algorithm>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -27,14 +27,6 @@
 #include <string>
 #include <vector>
 
-#if defined(__ANDROID__)
-#include <sys/mman.h>
-#include <unistd.h>
-#ifndef MAP_FIXED_NOREPLACE
-#define MAP_FIXED_NOREPLACE 0x100000
-#endif
-#endif
-
 #include "QBDI/Config.h"
 #include "QBDI/Memory.h"
 #include "QBDI/Memory.hpp"
@@ -42,49 +34,99 @@
 #include "QBDI/State.h"
 #include "Utility/LogSys.h"
 
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+#include <pthread.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+#endif
+
 #define FRAME_LENGTH 16
 
 namespace {
 
-#if defined(QBDI_PLATFORM_ANDROID)
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
 
 struct MMapAllocation {
   void *ptr;
+  void *mapping;
   size_t size;
 };
 
 std::mutex mmapAllocationsMutex;
 std::vector<MMapAllocation> mmapAllocations;
+thread_local uintptr_t nextStackAddress = 0;
 
-uintptr_t alignUp(uintptr_t value, uintptr_t align) {
-  return (value + align - 1) & ~(align - 1);
+size_t androidPageSize() {
+  static const size_t pageSize = []() {
+    long value = sysconf(_SC_PAGESIZE);
+    if (value <= 0 || (value & (value - 1)) != 0) {
+      return size_t(4096);
+    }
+    return static_cast<size_t>(value);
+  }();
+  return pageSize;
 }
 
-size_t pageAlignedSize(size_t size) {
-  long pageSize = sysconf(_SC_PAGESIZE);
-  uintptr_t align = pageSize > 0 ? static_cast<uintptr_t>(pageSize) : 4096;
-  return static_cast<size_t>(alignUp(size, align));
+bool alignUp(uintptr_t value, uintptr_t align, uintptr_t *result) {
+  if (value > std::numeric_limits<uintptr_t>::max() - align + 1) {
+    return false;
+  }
+  *result = (value + align - 1) & ~(align - 1);
+  return true;
+}
+
+bool pageAlignedSize(size_t size, size_t *result) {
+  const size_t pageSize = androidPageSize();
+  if (size == 0 || size > std::numeric_limits<size_t>::max() - pageSize + 1) {
+    return false;
+  }
+  *result = (size + pageSize - 1) & ~(pageSize - 1);
+  return true;
 }
 
 uintptr_t currentStackAddress() {
-  return reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+  uintptr_t sp = 0;
+  asm volatile("mov %0, sp" : "=r"(sp));
+  return sp;
 }
 
-void rememberMMapAllocation(void *ptr, size_t size) {
+uintptr_t currentStackEnd() {
+#if __ANDROID_API__ >= 24
+  pthread_attr_t attributes;
+  if (pthread_getattr_np(pthread_self(), &attributes) == 0) {
+    void *stackBase = nullptr;
+    size_t stackSize = 0;
+    int result = pthread_attr_getstack(&attributes, &stackBase, &stackSize);
+    pthread_attr_destroy(&attributes);
+    if (result == 0 &&
+        stackSize <= std::numeric_limits<uintptr_t>::max() -
+                         reinterpret_cast<uintptr_t>(stackBase)) {
+      return reinterpret_cast<uintptr_t>(stackBase) + stackSize;
+    }
+  }
+#endif
+  return 0;
+}
+
+void rememberMMapAllocation(void *ptr, void *mapping, size_t size) {
   std::lock_guard<std::mutex> lock(mmapAllocationsMutex);
-  mmapAllocations.push_back({ptr, size});
+  mmapAllocations.push_back({ptr, mapping, size});
 }
 
-size_t forgetMMapAllocation(void *ptr) {
+bool forgetMMapAllocation(void *ptr, void **mapping, size_t *size) {
   std::lock_guard<std::mutex> lock(mmapAllocationsMutex);
   for (auto it = mmapAllocations.begin(); it != mmapAllocations.end(); ++it) {
     if (it->ptr == ptr) {
-      size_t size = it->size;
+      *mapping = it->mapping;
+      *size = it->size;
       mmapAllocations.erase(it);
-      return size;
+      return true;
     }
   }
-  return 0;
+  return false;
 }
 
 void *mmapNoReplace(uintptr_t address, size_t size) {
@@ -101,40 +143,84 @@ void *mmapNoReplace(uintptr_t address, size_t size) {
   return ptr;
 }
 
+void *mmapStack(uintptr_t address, size_t mappingSize, size_t pageSize) {
+  void *mapping = mmapNoReplace(address, mappingSize);
+  if (mapping == nullptr) {
+    return nullptr;
+  }
+  if (mprotect(mapping, pageSize, PROT_NONE) != 0) {
+    munmap(mapping, mappingSize);
+    return nullptr;
+  }
+  return mapping;
+}
+
+void rememberNextStackAddress(uintptr_t address, size_t mappingSize) {
+  if (address <= std::numeric_limits<uintptr_t>::max() - mappingSize) {
+    nextStackAddress = address + mappingSize;
+  } else {
+    nextStackAddress = 0;
+  }
+}
+
 void *allocateAndroidStackAboveCurrentStack(size_t stackSize) {
-  const size_t allocationSize = pageAlignedSize(stackSize);
-  long pageSizeValue = sysconf(_SC_PAGESIZE);
-  const uintptr_t pageSize =
-      pageSizeValue > 0 ? static_cast<uintptr_t>(pageSizeValue) : 4096;
-  uintptr_t cursor = alignUp(currentStackAddress() + pageSize, pageSize);
+  const uintptr_t pageSize = androidPageSize();
+  size_t allocationSize = 0;
+  if (!pageAlignedSize(stackSize, &allocationSize) ||
+      allocationSize > std::numeric_limits<size_t>::max() - pageSize) {
+    return nullptr;
+  }
+  const size_t mappingSize = allocationSize + pageSize;
+
+  uintptr_t cursor = currentStackEnd();
+  if (cursor == 0) {
+    cursor = currentStackAddress();
+  }
+  if (!alignUp(cursor, pageSize, &cursor)) {
+    return nullptr;
+  }
+  if (nextStackAddress > cursor) {
+    cursor = nextStackAddress;
+  }
+
+  // The fast path avoids parsing /proc/self/maps when the first page after
+  // the current stack is available. MAP_FIXED_NOREPLACE keeps this race-safe.
+  if (void *mapping = mmapStack(cursor, mappingSize, pageSize)) {
+    void *ptr = static_cast<uint8_t *>(mapping) + pageSize;
+    rememberMMapAllocation(ptr, mapping, mappingSize);
+    rememberNextStackAddress(cursor, mappingSize);
+    return ptr;
+  }
 
   std::vector<QBDI::MemoryMap> maps = QBDI::getCurrentProcessMaps(false);
-  std::sort(maps.begin(), maps.end(),
-            [](const QBDI::MemoryMap &a, const QBDI::MemoryMap &b) {
-              return a.range.start() < b.range.start();
-            });
 
   for (const QBDI::MemoryMap &map : maps) {
     if (map.range.end() <= cursor) {
       continue;
     }
 
-    uintptr_t candidate = alignUp(cursor, pageSize);
+    uintptr_t candidate = cursor;
     if (candidate < map.range.start() &&
-        candidate + allocationSize <= map.range.start()) {
-      if (void *ptr = mmapNoReplace(candidate, allocationSize)) {
-        rememberMMapAllocation(ptr, allocationSize);
+        map.range.start() - candidate >= mappingSize) {
+      if (void *mapping = mmapStack(candidate, mappingSize, pageSize)) {
+        void *ptr = static_cast<uint8_t *>(mapping) + pageSize;
+        rememberMMapAllocation(ptr, mapping, mappingSize);
+        rememberNextStackAddress(candidate, mappingSize);
         return ptr;
       }
     }
 
     if (cursor < map.range.end()) {
-      cursor = alignUp(map.range.end(), pageSize);
+      if (!alignUp(map.range.end(), pageSize, &cursor)) {
+        return nullptr;
+      }
     }
   }
 
-  if (void *ptr = mmapNoReplace(alignUp(cursor, pageSize), allocationSize)) {
-    rememberMMapAllocation(ptr, allocationSize);
+  if (void *mapping = mmapStack(cursor, mappingSize, pageSize)) {
+    void *ptr = static_cast<uint8_t *>(mapping) + pageSize;
+    rememberMMapAllocation(ptr, mapping, mappingSize);
+    rememberNextStackAddress(cursor, mappingSize);
     return ptr;
   }
 
@@ -179,10 +265,15 @@ void alignedFree(void *ptr) {
 #if defined(QBDI_PLATFORM_WINDOWS)
   _aligned_free(ptr);
 #else
-#if defined(QBDI_PLATFORM_ANDROID)
-  if (size_t mmapSize = forgetMMapAllocation(ptr)) {
-    munmap(ptr, mmapSize);
-    return;
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+  if (ptr != nullptr &&
+      reinterpret_cast<uintptr_t>(ptr) % androidPageSize() == 0) {
+    void *mapping = nullptr;
+    size_t mappingSize = 0;
+    if (forgetMMapAllocation(ptr, &mapping, &mappingSize)) {
+      munmap(mapping, mappingSize);
+      return;
+    }
   }
 #endif
   free(ptr);
@@ -190,14 +281,18 @@ void alignedFree(void *ptr) {
 }
 
 bool allocateVirtualStack(GPRState *ctx, uint32_t stackSize, uint8_t **stack) {
-#if defined(QBDI_PLATFORM_ANDROID)
+  if (ctx == nullptr || stack == nullptr) {
+    return false;
+  }
+  *stack = nullptr;
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
   (*stack) = static_cast<uint8_t *>(
       allocateAndroidStackAboveCurrentStack(static_cast<size_t>(stackSize)));
 #else
   (*stack) = static_cast<uint8_t *>(alignedAlloc(stackSize, 16));
 #endif
   if (*stack == nullptr) {
-#if defined(QBDI_PLATFORM_ANDROID)
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
     QBDI_WARN(
         "Failed to allocate an Android virtual stack above the current "
         "thread stack");

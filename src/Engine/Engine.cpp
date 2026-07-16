@@ -38,6 +38,7 @@
 #include "QBDI/Bitmask.h"
 #include "QBDI/Config.h"
 #include "QBDI/Errors.h"
+#include "QBDI/Memory.hpp"
 #include "QBDI/PtrAuth.h"
 #include "QBDI/Range.h"
 #include "QBDI/State.h"
@@ -73,7 +74,11 @@ Engine::Engine(const std::string &_cpu, const std::vector<std::string> &_mattrs,
   curExecBlock = nullptr;
 }
 
-Engine::~Engine() = default;
+Engine::~Engine() {
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+  alignedFree(switchStack);
+#endif
+}
 
 Engine::Engine(const Engine &other)
     : vminstance(nullptr), instrRules(),
@@ -176,6 +181,25 @@ void Engine::changeVMInstanceRef(VMInstanceRef vminstance) {
     r.second->changeVMInstanceRef(vminstance);
   }
 }
+
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+uint8_t *Engine::getSwitchStack(uint32_t stackSize) {
+  if (switchStack != nullptr && switchStackSize == stackSize) {
+    return switchStack;
+  }
+
+  GPRState stackState = {};
+  uint8_t *newStack = nullptr;
+  if (!allocateVirtualStack(&stackState, stackSize, &newStack)) {
+    return nullptr;
+  }
+
+  alignedFree(switchStack);
+  switchStack = newStack;
+  switchStackSize = stackSize;
+  return switchStack;
+}
+#endif
 
 void Engine::initGPRState() { memset(gprState.get(), 0, sizeof(GPRState)); }
 

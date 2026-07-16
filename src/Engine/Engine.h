@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "QBDI/Callback.h"
+#include "QBDI/Config.h"
 #include "QBDI/InstAnalysis.h"
 #include "QBDI/Options.h"
 #include "QBDI/Range.h"
@@ -70,6 +71,10 @@ private:
   Options options;
   VMEvent eventMask;
   bool running;
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+  uint8_t *switchStack = nullptr;
+  uint32_t switchStackSize = 0;
+#endif
 
   std::vector<Patch> patch(rword start);
 
@@ -109,6 +114,10 @@ public:
    * @param[in] vminstance   The new vminstance
    */
   void changeVMInstanceRef(VMInstanceRef vminstance);
+
+#if defined(QBDI_PLATFORM_ANDROID) && defined(QBDI_ARCH_AARCH64)
+  uint8_t *getSwitchStack(uint32_t stackSize);
+#endif
 
   /*! Obtain the current general purpose register state.
    *
