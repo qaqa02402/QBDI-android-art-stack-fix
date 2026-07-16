@@ -1,0 +1,92 @@
+name: Android AArch64 LLVM 22
+
+on:
+  push:
+    branches:
+      - test/llvm22-aarch64-art
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-aarch64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      ANDROID_ABI: arm64-v8a
+      ANDROID_PLATFORM: 24
+      NDK_VERSION: r27
+      QBDI_ARCH: AARCH64
+      QBDI_PLATFORM: android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-${{ env.NDK_VERSION }}
+          key: android-ndk-${{ env.NDK_VERSION }}-linux
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build python3 unzip wget zlib1g-dev
+
+      - name: Install Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          wget --no-verbose \
+            https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+          rm android-ndk-${NDK_VERSION}-linux.zip
+
+      - name: Configure Android AArch64
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/android-ndk-${NDK_VERSION}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="${ANDROID_PLATFORM}" \
+            -DQBDI_ARCH="${QBDI_ARCH}" \
+            -DQBDI_PLATFORM="${QBDI_PLATFORM}" \
+            -DQBDI_STATIC_LIBRARY=ON \
+            -DQBDI_SHARED_LIBRARY=OFF \
+            -DQBDI_TEST=OFF \
+            -DQBDI_BENCHMARK=OFF \
+            -DQBDI_EXAMPLES=OFF \
+            -DQBDI_TOOLS_QBDIPRELOAD=OFF \
+            -DQBDI_TOOLS_VALIDATOR=OFF \
+            -DQBDI_TOOLS_PYQBDI=OFF \
+            -DQBDI_TOOLS_FRIDAQBDI=OFF
+
+      - name: Build package
+        run: cmake --build build --parallel 2 --target package
+
+      - name: Link AArch64 exclusive-monitor regression
+        run: |
+          android-ndk-${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++ \
+            -fPIE -pie -std=c++17 -O2 -static-libstdc++ \
+            -Ibuild/include \
+            -Ibuild/include-static \
+            -Iinclude \
+            repro/android-art-stack/qbdi_aarch64_exclusive_test.cpp \
+            -Wl,--start-group build/libQBDI.a -Wl,--end-group \
+            -llog -ldl -lz -lm \
+            -o build/qbdi-aarch64-exclusive-test
+
+      - name: Upload Android AArch64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qbdi-llvm22-android-aarch64
+          path: |
+            build/QBDI-*-android-AARCH64.tar.gz
+            build/qbdi-aarch64-exclusive-test
+          if-no-files-found: error
